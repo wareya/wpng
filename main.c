@@ -92,24 +92,14 @@ void wpng_load_and_save(byte_buffer * buf)
     
     uint8_t temp = color_type / 2;
     uint8_t bpp = (((temp & 1) << 1) + ((temp & 2) >> 1)) + 1;
-    /*
-    byte_buffer dec;
-    memset(&dec, 0, sizeof(byte_buffer));
-    struct sinfl_callbacks callbacks;
-    callbacks.userdata = (void *)&dec;
-    callbacks.bytes_push = cb_bytes_push;
-    callbacks.bytes_copy = cb_bytes_copy;
-    callbacks.verify_checksum = cb_verify_checksum;
     
-    zsinflate(idat.data, idat.len, &callbacks); // decompresses into `dec` (declared earlier)
-    */
     byte_buffer buf2 = {&idat.data[2], idat.len - 6, idat.len - 6, 0};
     int error = 0;
     byte_buffer dec = do_inflate(&buf2, &error); // decompresses into `dec` (declared earlier)
     dec.cur = 0;
     printf("%d\n", error);
     
-    uint8_t * image_data = malloc(height * width * bpp);
+    uint8_t * image_data = (uint8_t *)malloc(height * width * bpp);
     memset(image_data, 0, height * width * bpp);
     
     for (size_t y = 0; y < height; y++)
@@ -171,20 +161,43 @@ void wpng_load_and_save(byte_buffer * buf)
 
 int main()
 {
-    //FILE * f = fopen("unifont-jp.png", "rb");
-    FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
+    if (0)
+    {
+        //FILE * f = fopen("unifont-jp.png", "rb");
+        FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
+        
+        fseek(f, 0, SEEK_END);
+        size_t file_len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        
+        uint8_t * raw_data = (uint8_t *)malloc(file_len);
+        fread(raw_data, file_len, 1, f);
+        byte_buffer in_buf = {raw_data, file_len, file_len, 0};
+        
+        fclose(f);
+        
+        wpng_load_and_save(&in_buf);
+    }
     
-    fseek(f, 0, SEEK_END);
-    size_t file_len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
-    uint8_t * raw_data = (uint8_t *)malloc(file_len);
-    fread(raw_data, file_len, 1, f);
-    byte_buffer in_buf = {raw_data, file_len, file_len, 0};
-    
-    fclose(f);
-    
-    wpng_load_and_save(&in_buf);
-    
+    {
+        FILE * f = fopen("pyout2.bin", "rb");
+        
+        fseek(f, 0, SEEK_END);
+        size_t file_len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        
+        uint8_t * raw_data = (uint8_t *)malloc(file_len);
+        fread(raw_data, file_len, 1, f);
+        byte_buffer in_buf = {raw_data, file_len, file_len, 0};
+        
+        fclose(f);
+        
+        int error = 0;
+        byte_buffer dec = do_inflate(&in_buf, &error); // decompresses into `dec` (declared earlier)
+        dec.cur = 0;
+        printf("%d\n", error);
+        for (size_t i = 0; i < dec.len; i += 1)
+            printf("%02X ", dec.data[i]);
+    }
 	return 0;
 }

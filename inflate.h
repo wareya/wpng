@@ -1,24 +1,21 @@
+#ifndef INCL_INFLATE
+#define INCL_INFLATE
 
 #include <stdint.h> // basic types
 #include <stdlib.h> // size_t
 
 #include "buffers.h"
 
+#define ASSERT_OR_BROKEN_FILE(expr,ret) { if (!(expr)) { *error = -1; printf("assert failed on line %d\n", __LINE__); return ret; } }
+#define ASSERT_OR_BROKEN_DECODER(expr,ret) { if (!(expr)) { *error = 1; printf("assert failed on line %d\n", __LINE__); return ret; } }
 
-void print_binary(uint64_t val, uint8_t size)
-{
-    for (size_t i = 0; i < size; i++)
-        printf("%c", val & (1 << (size - i - 1)) ? '1' : '0');
-}
-
-void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_len, size_t total_count)
+void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_len, size_t total_count, int * error)
 {
     uint16_t min = 0;
     uint16_t len_count[15] = {0};
     for (size_t val = 0; val < total_count; val += 1)
     {
         uint8_t len = code_lens[val];
-        //printf("code len for %d: %d\n", val, len);
         if (len)
             len_count[len]++;
     }
@@ -26,6 +23,7 @@ void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_le
     for (size_t i = 0; i < 15; i += 1)
     {
         min += min + (len_count[i] << 1); // not a typo
+        ASSERT_OR_BROKEN_FILE(min <= (1 << (i + 1)),)
         code_by_len[i + 1] = min;
     }
     for (uint16_t val = 0; val < total_count; val += 1)
@@ -34,17 +32,10 @@ void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_le
         if (len)
         {
             uint16_t code = code_by_len[len]++;
-            //printf("mapping ");
-            //print_binary(code, len);
-            //printf(" to %d\n", val);
             code_lits[code] = val;
         }
     }
 }
-
-#define ASSERT_OR_BROKEN_FILE(expr,ret) { if (!(expr)) { *error = -1; printf("assert failed on line %d\n", __LINE__); return ret; } }
-#define ASSERT_OR_BROKEN_DECODER(expr,ret) { if (!(expr)) { *error = 1; printf("assert failed on line %d\n", __LINE__); return ret; } }
-
 uint16_t read_huff_code(bit_buffer * input, uint16_t * code_by_len, int * error)
 {
     uint8_t code_len = 1;
@@ -55,7 +46,6 @@ uint16_t read_huff_code(bit_buffer * input, uint16_t * code_by_len, int * error)
         code_len += 1;
     }
     ASSERT_OR_BROKEN_FILE(code != 0 || code_len < 16, code)
-    //printf("%d with code %d\n", code_lits[code], code);
     return code;
 }
 
@@ -63,7 +53,6 @@ void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits, uint16
 {
     int huff_error = 0;
     uint16_t literal = 256;
-    //puts("reading literals...");
     do
     {
         literal = code_lits[read_huff_code(input, code_by_len, &huff_error)];
@@ -72,34 +61,25 @@ void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits, uint16
         
         if (literal < 256)
         {
-            //printf("pushing a literal, %d\n", literal);
             byte_push(ret, literal);
         }
         else if (literal > 256)
         {
-            //puts("reading extra bits...");
             uint8_t len_extra_bits = 0;
             if (literal >= 261 && literal < 285)
                 len_extra_bits = (literal - 261) / 4;
             uint16_t len_mins[29] = {3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258};
             uint16_t len = len_mins[literal-257] + bits_pop(input, len_extra_bits);
             
-            //printf("%d %d %d\n", literal, len, len_extra_bits);
-            
             uint16_t dist_literal = dist_code_lits[read_huff_code(input, dist_code_by_len, &huff_error)];
             ASSERT_OR_BROKEN_FILE(huff_error == 0,)
             ASSERT_OR_BROKEN_FILE(dist_literal <= 29,)
-            
-            //printf("%d %d\n", dist_code, dist_literal);
             
             uint8_t dist_extra_bits = 0;
             if (dist_literal >= 2)
                 dist_extra_bits = (dist_literal - 2) / 2;
             uint16_t dist_mins[30] = {1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
             uint16_t dist = dist_mins[dist_literal] + bits_pop(input, dist_extra_bits);
-            
-            //printf("lookback command: %d %d\n", len, dist);
-            //printf("(output len so far: %lld)\n", ret.len);
             ASSERT_OR_BROKEN_FILE(dist <= ret->len,)
             
             for (size_t j = 0; j < len; j++)
@@ -107,6 +87,9 @@ void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits, uint16
         }
         else
             break;
+        
+        if (input->byte_index == input->buffer.len && input->bit_index != 0)
+            ASSERT_OR_BROKEN_FILE(0,)
     } while (literal != 256);
 }
 // on error, error is set to nonzero. otherwise error is unset
@@ -118,15 +101,15 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
     bit_buffer input = {*input_bytes, 0, 0};
     
     uint16_t static_lits[1 << 9];
-    memset(static_lits, 0xFF, sizeof(uint16_t) * (1 << 9));
+    memset(static_lits, 0, sizeof(uint16_t) * (1 << 9));
+    for (uint16_t i = 0; i < 24; i++)
+        static_lits[i] = i + 256;
     for (uint16_t i = 0; i < 144; i++)
-        static_lits[i] = i + 48;
-    for (uint16_t i = 144; i < 256; i++)
-        static_lits[i] = i - 144 + 400;
-    for (uint16_t i = 256; i < 280; i++)
-        static_lits[i] = i - 256;
-    for (uint16_t i = 280; i < 288; i++)
-        static_lits[i] = i - 280 + 192;
+        static_lits[i + 48] = i;
+    for (uint16_t i = 0; i < 8; i++)
+        static_lits[i + 384] = i + 280;
+    for (uint16_t i = 0; i < 112; i++)
+        static_lits[i + 400] = i + 144;
     
     uint16_t static_by_len[16];
     memset(static_by_len, 0, sizeof(uint16_t) * 16);
@@ -135,13 +118,13 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
     static_by_len[9] = 0xFFFF;
     
     uint16_t static_dists[1 << 5];
-    memset(static_dists, 0xFF, (1 << 5) - 1);
+    memset(static_dists, 0, sizeof(uint16_t) * (1 << 5));
     for (uint16_t i = 0; i < 32; i++)
         static_dists[i] = i;
     
     uint16_t static_dists_by_len[16];
     memset(static_dists_by_len, 0, sizeof(uint16_t) * 16);
-    static_by_len[5] = 0xFFFF;
+    static_dists_by_len[5] = 0xFFFF;
     
     while(1)
     {
@@ -152,8 +135,10 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             bits_align_to_byte(&input);
             uint16_t len = bits_pop(&input, 16);
             uint16_t nlen = bits_pop(&input, 16);
+            
             ASSERT_OR_BROKEN_FILE(len == (uint16_t)~nlen, ret)
             ASSERT_OR_BROKEN_FILE(input.byte_index + len <= input.buffer.len, ret)
+            
             bytes_push(&ret, &input.buffer.data[input.byte_index], len);
             input.byte_index += len;
             break;
@@ -175,22 +160,15 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             uint16_t inst_code_lits[1 << 7] = {0};
             uint16_t inst_code_by_len[16] = {0};
             
-            uint8_t max_len = 0;
             for (uint16_t i = 0; i < codelen_count; i += 1)
             {
                 uint8_t len = bits_pop(&input, 3);
-                //printf("loaded code len %d for value %d\n", len, inst_code_vals[i]);
                 inst_code_lens[inst_code_vals[i]] = len;
             }
             
-            build_code(inst_code_lens, inst_code_lits, inst_code_by_len, 19);
-            
-            for (size_t i = 0; i < 16; i += 1)
-            {
-                //print_binary(inst_code_by_len[i], i);
-                //puts("");
-                //printf("by len %d: %d\n", i, inst_code_by_len[i]);
-            }
+            int code_error = 0;
+            build_code(inst_code_lens, inst_code_lits, inst_code_by_len, 19, &code_error);
+            ASSERT_OR_BROKEN_FILE(code_error == 0, ret)
             
             int huff_error = 0;
             // parse compressed code lengths
@@ -199,9 +177,6 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             {
                 uint16_t inst = inst_code_lits[read_huff_code(&input, inst_code_by_len, &huff_error)];
                 ASSERT_OR_BROKEN_FILE(huff_error == 0, ret)
-                //printf("inst %d with code ", inst);
-                //print_binary(inst_code, inst_code_len);
-                //puts("");
                 
                 if (inst < 16)
                     raw_code_lens[i] = inst;
@@ -209,46 +184,36 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
                 {
                     ASSERT_OR_BROKEN_FILE(i > 0, ret)
                     uint8_t count = bits_pop(&input, 2) + 3;
+                    ASSERT_OR_BROKEN_FILE(i + count <= 288 + 32, ret)
                     for (size_t j = i; j < i + count; j += 1)
                         raw_code_lens[j] = raw_code_lens[i - 1];
                     i += count - 1;
                 }
-                else if (inst == 17)
+                else if (inst == 17 || inst == 18)
                 {
-                    uint8_t count = bits_pop(&input, 3) + 3;
-                    for (size_t j = i; j < i + count; j += 1)
-                        raw_code_lens[j] = 0;
-                    i += count - 1;
-                }
-                else if (inst == 18)
-                {
-                    uint8_t count = bits_pop(&input, 7) + 11;
+                    uint8_t count = inst == 18 ? bits_pop(&input, 7) + 11 : bits_pop(&input, 3) + 3;
+                    ASSERT_OR_BROKEN_FILE(i + count <= 288 + 32, ret)
                     for (size_t j = i; j < i + count; j += 1)
                         raw_code_lens[j] = 0;
                     i += count - 1;
                 }
                 else
                     ASSERT_OR_BROKEN_FILE(0, ret)
-                //printf("set len of code %d to %d\n", i, raw_code_lens[i]);
             }
             
             uint8_t code_lens[288] = {0};
             uint16_t code_lits[1 << 15] = {0};
             uint16_t code_by_len[16] = {0};
             memcpy(code_lens, raw_code_lens, len_count);
-            build_code(code_lens, code_lits, code_by_len, 288);
+            build_code(code_lens, code_lits, code_by_len, 288, &code_error);
+            ASSERT_OR_BROKEN_FILE(code_error == 0, ret)
             
             uint8_t dist_code_lens[32] = {0};
             uint16_t dist_code_lits[1 << 15] = {0};
             uint16_t dist_code_by_len[16] = {0};
             memcpy(dist_code_lens, &raw_code_lens[len_count], dist_count);
-            build_code(dist_code_lens, dist_code_lits, dist_code_by_len, 32);
-            
-            //for (size_t i = 0; i <= 15; i += 1)
-            //    printf("by len %d: %d\n", i, code_by_len[i]);
-            //
-            //for (size_t i = 0; i <= 15; i += 1)
-            //    printf("by len %d: %d\n", i, dist_code_by_len[i]);
+            build_code(dist_code_lens, dist_code_lits, dist_code_by_len, 32, &code_error);
+            ASSERT_OR_BROKEN_FILE(code_error == 0, ret)
             
             int lz77_error = 0;
             do_lz77(&input, &ret, code_lits, code_by_len, dist_code_lits, dist_code_by_len, &lz77_error);
@@ -272,3 +237,5 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
 
 #undef ASSERT_OR_BROKEN_FILE
 #undef ASSERT_OR_BROKEN_DECODER
+
+#endif // INCL_INFLATE
