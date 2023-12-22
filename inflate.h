@@ -22,7 +22,11 @@ void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_le
     
     for (size_t i = 0; i < 15; i += 1)
     {
+        uint16_t old_min = min;
         min += min + (len_count[i] << 1); // not a typo
+        if (min < old_min)
+            min = 0xFFFF;
+        printf("giving count cap value %d to code length %d (length %d has count %d)\n", min, i+1, i, len_count[i]);
         ASSERT_OR_BROKEN_FILE(min <= (1 << (i + 1)),)
         code_by_len[i + 1] = min;
     }
@@ -32,6 +36,7 @@ void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_le
         if (len)
         {
             uint16_t code = code_by_len[len]++;
+            printf("assigning code %02X to value %d\n", code, val);
             code_lits[code] = val;
         }
     }
@@ -45,6 +50,7 @@ uint16_t read_huff_code(bit_buffer * input, uint16_t * code_by_len, int * error)
         code = (code << 1) | bit_pop(input);
         code_len += 1;
     }
+    //printf("read a code (%d) with length %d\n", code, code_len);
     ASSERT_OR_BROKEN_FILE(code != 0 || code_len < 16, code)
     return code;
 }
@@ -91,6 +97,7 @@ void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits, uint16
         if (input->byte_index == input->buffer.len && input->bit_index != 0)
             ASSERT_OR_BROKEN_FILE(0,)
     } while (literal != 256);
+    //puts("block ended!");
 }
 // on error, error is set to nonzero. otherwise error is unset
 // positive error: bug in decoder
@@ -128,20 +135,24 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
     
     while(1)
     {
+        //puts("-- starting a block!");
         uint8_t final = bit_pop(&input);
         uint8_t type = bits_pop(&input, 2);
+        //if (final)
+        //    printf("-- it's final!!!\n");
         if (type == 0)
         {
             bits_align_to_byte(&input);
+            //printf("-- literal addr %08llX\n", (unsigned long long)input.byte_index);
             uint16_t len = bits_pop(&input, 16);
             uint16_t nlen = bits_pop(&input, 16);
             
+            //printf("literal len: %d\n", len);
             ASSERT_OR_BROKEN_FILE(len == (uint16_t)~nlen, ret)
             ASSERT_OR_BROKEN_FILE(input.byte_index + len <= input.buffer.len, ret)
             
             bytes_push(&ret, &input.buffer.data[input.byte_index], len);
             input.byte_index += len;
-            break;
         }
         else if (type == 1)
         {
@@ -167,6 +178,7 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             }
             
             int code_error = 0;
+            //puts("building meta code");
             build_code(inst_code_lens, inst_code_lits, inst_code_by_len, 19, &code_error);
             ASSERT_OR_BROKEN_FILE(code_error == 0, ret)
             
@@ -176,6 +188,7 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             for (size_t i = 0; i < len_count + dist_count; i += 1)
             {
                 uint16_t inst = inst_code_lits[read_huff_code(&input, inst_code_by_len, &huff_error)];
+                //printf("\t\t\t\t\t(for value %d)\n", i < 288 ? i : i - 288);
                 ASSERT_OR_BROKEN_FILE(huff_error == 0, ret)
                 
                 if (inst < 16)
@@ -205,6 +218,7 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             uint16_t code_lits[1 << 15] = {0};
             uint16_t code_by_len[16] = {0};
             memcpy(code_lens, raw_code_lens, len_count);
+            //printf("building lit code, count %d\n", len_count);
             build_code(code_lens, code_lits, code_by_len, 288, &code_error);
             ASSERT_OR_BROKEN_FILE(code_error == 0, ret)
             

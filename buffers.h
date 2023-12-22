@@ -89,17 +89,23 @@ static inline void bits_push(bit_buffer * buf, uint64_t data, uint8_t bits)
     if (buf->buffer.len == 0)
         byte_push(&buf->buffer, 0);
     
+    if (buf->bit_index >= 8)
+    {
+        byte_push(&buf->buffer, 0);
+        buf->byte_index += 1;
+        buf->bit_index -= 8;
+    }
+    
+    assert(buf->byte_index == buf->buffer.len - 1);
+    
     // if we have more bits to push than are available, push as many bits as possible without adding new bytes all at once
-    if (bits >= 8 - buf->bit_index)
+    if (bits > 8 - buf->bit_index)
     {
         uint8_t avail = 8 - buf->bit_index;
         uint64_t mask = (1 << avail) - 1;
-        buf->buffer.data[buf->buffer.len - 1] |= (data & mask) << buf->bit_index;
+        buf->buffer.data[buf->byte_index] |= (uint8_t)(data & mask) << buf->bit_index;
         
-        byte_push(&buf->buffer, 0);
-        
-        buf->bit_index = 0;
-        buf->byte_index += 1;
+        buf->bit_index = 8;
         
         bits -= avail;
         data >>= avail;
@@ -107,19 +113,26 @@ static inline void bits_push(bit_buffer * buf, uint64_t data, uint8_t bits)
         // then push any remaining whole bytes worth of bits all at once
         while (bits >= 8)
         {
-            buf->buffer.data[buf->buffer.len - 1] |= data & 0xFF;
-            bits -= 8;
-            data >>= 8;
             byte_push(&buf->buffer, 0);
             buf->byte_index += 1;
+            buf->buffer.data[buf->byte_index] |= (uint8_t)data & 0xFF;
+            
+            bits -= 8;
+            data >>= 8;
         }
     }
     
-    // push any remaining bits (we'll be at less than 8 bits to write and more than 8 bits available)
     if (bits > 0)
     {
+        if (buf->bit_index >= 8)
+        {
+            byte_push(&buf->buffer, 0);
+            buf->byte_index += 1;
+            buf->bit_index -= 8;
+        }
+        
         uint64_t mask = (1 << bits) - 1;
-        buf->buffer.data[buf->buffer.len - 1] |= (data & mask) << buf->bit_index;
+        buf->buffer.data[buf->byte_index] |= (data & mask) << buf->bit_index;
         buf->bit_index += bits;
         return;
     }
@@ -131,11 +144,11 @@ static inline void bit_push(bit_buffer * buf, uint8_t data)
         byte_push(&buf->buffer, 0);
         if (buf->bit_index >= 8)
         {
-            buf->bit_index -= 8;
             buf->byte_index += 1;
+            buf->bit_index -= 8;
         }
     }
-    buf->buffer.data[buf->buffer.len - 1] |= data << buf->bit_index;
+    buf->buffer.data[buf->byte_index] |= data << buf->bit_index;
     buf->bit_index += 1;
 }
 static inline uint64_t bits_pop(bit_buffer * buf, uint8_t bits)
@@ -149,8 +162,8 @@ static inline uint64_t bits_pop(bit_buffer * buf, uint8_t bits)
     {
         if (buf->bit_index >= 8)
         {
-            buf->bit_index -= 8;
             buf->byte_index += 1;
+            buf->bit_index -= 8;
         }
         ret |= (uint64_t)((buf->buffer.data[buf->byte_index] >> buf->bit_index) & 1) << n;
         buf->bit_index += 1;
@@ -163,8 +176,8 @@ static inline uint8_t bit_pop(bit_buffer * buf)
         return 0;
     if (buf->bit_index >= 8)
     {
-        buf->bit_index -= 8;
         buf->byte_index += 1;
+        buf->bit_index -= 8;
     }
     uint8_t ret = (buf->buffer.data[buf->byte_index] >> buf->bit_index) & 1;
     buf->bit_index += 1;
@@ -173,9 +186,7 @@ static inline uint8_t bit_pop(bit_buffer * buf)
 }
 static inline void bits_align_to_byte(bit_buffer * buf)
 {
-    if (buf->bit_index != 0)
-        buf->byte_index += 1;
-    buf->bit_index = 0;
+    buf->bit_index = 8;
 }
 
 #endif // INCL_BUFFERS

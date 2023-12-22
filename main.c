@@ -4,10 +4,11 @@
 #include <string.h>
 #include <assert.h>
 
-#define SINFL_IMPLEMENTATION
-#include "sinfl.h"
+//#define SINFL_IMPLEMENTATION
+//#include "sinfl.h"
 
 #include "inflate.h"
+#include "deflate.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -179,6 +180,19 @@ int main()
         wpng_load_and_save(&in_buf);
     }
     
+    const char * test = "Ah, to be human. A pitiful thing. Come, I will bring to you oblivion, and pass upon you the Gnosis.";
+    
+    puts("compressing...");
+    bit_buffer comp = do_deflate((const uint8_t *)test, strlen(test) + 1, 12);
+    for (size_t i = 0; i < comp.buffer.len; i++)
+        printf("%02X ", comp.buffer.data[i]);
+    puts("");
+    int error = 0;
+    puts("decompressing...");
+    byte_buffer decomp = do_inflate(&comp.buffer, &error);
+    printf("%d\n", error);
+    printf("%s\n", decomp.data);
+    /*
     {
         FILE * f = fopen("pyout2.bin", "rb");
         
@@ -199,5 +213,6 @@ int main()
         for (size_t i = 0; i < dec.len; i += 1)
             printf("%02X ", dec.data[i]);
     }
+    */
 	return 0;
 }
