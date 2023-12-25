@@ -218,7 +218,7 @@ int main()
 {
     compute_crc32(0, 0, 0);
     
-    if (1)
+    if (0)
     {
         //FILE * f = fopen("unifont-jp.png", "rb");
         FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
@@ -251,10 +251,10 @@ int main()
         printf("%d\n", error);
         printf("%s\n", decomp.data);
     }
-    if (0)
+    if (1)
     {
         // error 0x19B0ish (around 19BA)
-        FILE * f = fopen("test text.txt", "rb");
+        FILE * f = fopen("moby dick.txt", "rb");
         
         fseek(f, 0, SEEK_END);
         size_t file_len = ftell(f);
@@ -267,17 +267,17 @@ int main()
         fclose(f);
         
         int error = 0;
-        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 1, 1); // compresses into `dec` (declared earlier)
+        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 12, 1); // compresses into `dec` (declared earlier)
         
-        FILE * f2 = fopen("test_out_2", "wb");
+        FILE * f2 = fopen("moby dick.txt.comp", "wb");
         fwrite(comp.buffer.data, comp.buffer.len, 1, f);
         fclose(f);
         
         comp.buffer.cur = 2;
         byte_buffer decomp = do_inflate(&comp.buffer, &error);
         
-        printf("%d\n", error);
-        printf("%s\n", decomp.data);
+        //printf("%d\n", error);
+        //printf("%s\n", decomp.data);
         
     }
 	return 0;

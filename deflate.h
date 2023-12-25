@@ -402,10 +402,33 @@ size_t gen_canonical_code(uint64_t * counts, huff_node_t ** unordered_dict, huff
 
 static void huff_write_code_desc(bit_buffer * ret, huff_node_t ** dict, huff_node_t ** dist_dict)
 {
+    uint32_t len_count = 286;
+    while (len_count > 257)
+    {
+        if (dict[len_count - 1] && dict[len_count - 1]->code_len)
+            break;
+        len_count -= 1;
+    }
+    uint32_t dist_count = 30;
+    while (dist_count > 1)
+    {
+        if (dist_dict[dist_count - 1] && dist_dict[dist_count - 1]->code_len)
+            break;
+        dist_count -= 1;
+    }
+    
+    uint8_t lens[316] = {0};
+    for (size_t i = 0; i < len_count; i += 1)
+        lens[i] = dict[i] ? dict[i]->code_len : 0;
+    
+    for (size_t i = 0; i < dist_count; i += 1)
+        lens[i + len_count] = dist_dict[i] ? dist_dict[i]->code_len : 0;
+    
     // for the sake of simplicity we don't bother building a perfectly compressed huff code description
     // instead, we only do RLE
-    bits_push(ret, 29, 5); // 286 (add 257)
-    bits_push(ret, 29, 5); // 30 (add 1)
+    // as far as I can tell, basically only doing RLE only loses us a couple bytes
+    bits_push(ret, len_count - 257, 5);
+    bits_push(ret, dist_count - 1, 5);
     bits_push(ret, 15, 4); // 19 (add 4)
     
     // lengths of code compression codes...
@@ -415,17 +438,10 @@ static void huff_write_code_desc(bit_buffer * ret, huff_node_t ** dict, huff_nod
     for (size_t i = 0; i < 16; i++) // 0, 8, 7, 9, etc
         bits_push(ret, i == 0 ? 5 : 4, 3);
     
-    uint8_t lens[316] = {0};
-    
-    for (size_t i = 0; i < 286; i += 1)
-        lens[i] = dict[i] ? dict[i]->code_len : 0;
-    for (size_t i = 0; i < 30; i += 1)
-        lens[i + 286] = dist_dict[i] ? dist_dict[i]->code_len : 0;
-    
-    for (size_t i = 0; i < 316; i += 1)
+    for (size_t i = 0; i < len_count + dist_count; i += 1)
     {
         size_t same_count = 1;
-        for (size_t j = i + 1; j < 316 && same_count < (lens[i] == 0 ? 138 : 7); j += 1)
+        for (size_t j = i + 1; j < len_count + dist_count && same_count < (lens[i] == 0 ? 138 : 7); j += 1)
         {
             if (lens[j] == lens[i])
                 same_count += 1;
@@ -717,7 +733,7 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
         huff_node_t * dist_root_to_free = 0;
         gen_canonical_code(dist_counts, dist_unordered_dict, dist_dict, &dist_root_to_free, 32);
         
-        printf("chunk starting at %08X:%d\n", ret.byte_index, ret.bit_index);
+        //printf("chunk starting at %08X:%d\n", ret.byte_index, ret.bit_index);
         
         bit_push(&ret, 0); // not the final chunk
         bits_push(&ret, 2, 2); // dynamic huffman chunk
@@ -764,10 +780,10 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
             }
         }
         huff_node_t * lit_node = dict[256];
-        printf("pushing code 0x%X with length %d\n", lit_node->code, lit_node->code_len);
+        //printf("pushing code 0x%X with length %d\n", lit_node->code, lit_node->code_len);
         bits_push(&ret, lit_node->code, lit_node->code_len);
         
-        printf("chunk ended at %08X:%d\n", ret.byte_index, ret.bit_index);
+        //printf("chunk ended at %08X:%d\n", ret.byte_index, ret.bit_index);
         
         if (root_to_free)
             free_huff_nodes(root_to_free);

@@ -28,7 +28,7 @@ static inline void bytes_reserve(byte_buffer * buf, size_t extra)
 {
     if (buf->cap < 8)
         buf->cap = 8;
-    while (buf->len + extra > buf->cap)
+    while (buf->len + extra >= buf->cap)
         buf->cap <<= 1;
     buf->data = (uint8_t *)BUF_REALLOC(buf->data, buf->cap);
     if (!buf->data)
@@ -36,7 +36,7 @@ static inline void bytes_reserve(byte_buffer * buf, size_t extra)
 }
 static inline void byte_push(byte_buffer * buf, uint8_t byte)
 {
-    if (buf->len == buf->cap)
+    if (buf->len >= buf->cap || buf->data == 0)
     {
         buf->cap = buf->cap << 1;
         if (buf->cap < 8)
@@ -49,6 +49,7 @@ static inline void byte_push(byte_buffer * buf, uint8_t byte)
 static inline void bytes_push(byte_buffer * buf, const uint8_t * bytes, size_t count)
 {
     bytes_reserve(buf, count);
+    assert(buf->len + count <= buf->cap);
     memcpy(&buf->data[buf->len], bytes, count);
     buf->len += count;
 }

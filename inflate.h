@@ -135,7 +135,7 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
     
     while(1)
     {
-        printf("-- starting a block at %08X:%d\n", input.byte_index, input.bit_index);
+        //printf("-- starting a block at %08X:%d\n", input.byte_index, input.bit_index);
         uint8_t final = bit_pop(&input);
         uint8_t type = bits_pop(&input, 2);
         //if (final)
