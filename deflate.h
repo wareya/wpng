@@ -23,7 +23,8 @@
 #define DEFL_FREE free
 #endif
 
-static const size_t defl_min_lookback_length = 3;
+// must be at least 3
+static const size_t lz77_min_lookback_length = 4;
 
 #ifndef DEFL_LOW_MEMORY
 #define DEFL_HASH_SIZE (20) // 1m
@@ -55,7 +56,7 @@ static inline uint32_t hashmap_hash_raw(const void * bytes)
     uint32_t temp = 0xA68BB0D5;
     // unaligned-safe 32-bit load
     uint32_t a = 0;
-    memcpy(&a, bytes, 4);
+    memcpy(&a, bytes, lz77_min_lookback_length);
     // then just multiply it by the const and return the top N bits
     return a * temp;
 }
@@ -80,8 +81,6 @@ static inline void hashmap_insert(defl_hashmap * hashmap, const uint8_t * bytes,
 static inline uint64_t hashmap_get(defl_hashmap * hashmap, size_t i, const uint8_t * input, const size_t buffer_len, const size_t pre_context, uint64_t * min_len, size_t * back_distance)
 {
     uint64_t remaining = buffer_len - i;
-    if (remaining > 258)
-        remaining = 258;
     if (i >= buffer_len || remaining <= DEFL_HASH_SIZE)
         return -1;
 
@@ -94,30 +93,34 @@ static inline uint64_t hashmap_get(defl_hashmap * hashmap, size_t i, const uint8
         return -1;
     
     // if we hit 128 bytes we call it good enough and take it
-    const uint64_t good_enough_length = 258;
+    const uint64_t good_enough_length = 128;
     
     // look for best match under key
     uint64_t best = -1;
-    uint64_t best_size = defl_min_lookback_length - 1;
+    uint64_t best_size = lz77_min_lookback_length - 1;
     uint64_t best_d = 0;
     uint64_t first_value = value;
     uint16_t chain_len = hashmap->chain_len;
     while (chain_len-- > 0)
     {
+        if (i - value > hashmap->max_distance)
+            break;
         if (memcmp(&input[i], &input[value], 4) == 0 && input[i + best_size] == input[value + best_size])
         {
             uint64_t size = 0;
-            while (size < remaining && input[i + size] == input[value + size])
-                size += 1;
             
             size_t d = 1;
-            while (value > 0 && input[i - d] == input[value - 1] && d <= pre_context)
+            while (size < 258 && value > 0 && input[i - d] == input[value - 1] && d <= pre_context)
             {
                 value -= 1;
                 size += 1;
+                remaining += 1;
                 d += 1;
             }
             d -= 1;
+            
+            while (size < 258 && size < remaining && input[i + size] == input[value + size])
+                size += 1;
             
             // bad heuristic for "is it worth it?"
             if (size > best_size)
@@ -134,14 +137,14 @@ static inline uint64_t hashmap_get(defl_hashmap * hashmap, size_t i, const uint8
         if (sizeof(size_t) > sizeof(uint32_t))
             value |= i & 0xFFFFFFFF00000000;
         
-        if (value == 0 || value > i || value == first_value || i - value > hashmap->max_distance)
+        if (value == 0 || value > i || value == first_value)
             break;
         const uint32_t key_2 = hashmap_hash(&input[value]);
         if (key_2 != key)
             break;
     }
     
-    if (best_size != defl_min_lookback_length - 1)
+    if (best_size != lz77_min_lookback_length - 1)
         *min_len = best_size;
     *back_distance = best_d;
     return best;
@@ -219,9 +222,11 @@ uint64_t bitswap(uint64_t bits, uint8_t len)
 }
 size_t gen_canonical_code(uint64_t * counts, huff_node_t ** unordered_dict, huff_node_t ** dict, huff_node_t ** root_to_free, size_t capacity)
 {
-    uint64_t symbol_bits = 9;
     //printf("capacity is %d\n", capacity);
-    // we stuff the byte identity into the bottom 8 bits
+    
+    // we stuff the byte identity into the bottom N bits
+    uint64_t symbol_bits = 9;
+    
     size_t symbol_count = 0;
     uint64_t total_count = 0;
     for (size_t b = 0; b < capacity; b++)
@@ -431,14 +436,14 @@ static void huff_write_code_desc(bit_buffer * ret, huff_node_t ** dict, huff_nod
         {
             if (same_count >= 11)
             {
-                puts("doing long zero rle");
+                //puts("doing long zero rle");
                 bits_push(ret, bitswap(0x7F, 7), 7); // 18 - multi-zero long (11-138)
                 bits_push(ret, same_count - 11, 7);
                 i += same_count - 1;
             }
             else if (same_count >= 3)
             {
-                puts("doing short zero rle");
+                //puts("doing short zero rle");
                 bits_push(ret, bitswap(0x3E, 6), 6); // 17 - multi-zero short (3-10)
                 bits_push(ret, same_count - 3, 3);
                 i += same_count - 1;
@@ -450,7 +455,7 @@ static void huff_write_code_desc(bit_buffer * ret, huff_node_t ** dict, huff_nod
         {
             if (same_count >= 4)
             {
-                puts("doing normal rle");
+                //puts("doing normal rle");
                 
                 bits_push(ret, bitswap(lens[i] - 1, 4), 4);
                 
@@ -468,66 +473,70 @@ static void huff_write_code_desc(bit_buffer * ret, huff_node_t ** dict, huff_nod
 static void len_get_info(size_t len, uint16_t * arg_code, uint16_t * arg_bit_count, uint16_t * bits)
 {
     uint16_t len_mins[29] = {3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258};
+    assert(len >= len_mins[0]);
     uint16_t code = 285;
-    for (size_t i = 0; i < 30; i += 1)
+    for (size_t i = 0; i < 29; i += 1)
     {
         if (len < len_mins[i])
-        {
-            code = i - 1 + 257;
             break;
-        }
+        code = i + 257;
     }
     if (arg_code) *arg_code = code;
     if (bits) *bits = 0;
     if (arg_bit_count) *arg_bit_count = 0;
     if (len == 258 || len <= 10)
-    {
-        //printf("giving code %d (no bits) for length %d\n", code, len);
         return;
-    }
     
-    code = code - 257;
-    assert(code < 29);
-    uint16_t bit_count = (code - 1) / 4;
+    code -= 257;
+    uint16_t bit_count = (code - 4) / 4;
     if (arg_bit_count) *arg_bit_count = bit_count;
     uint16_t bit_data = len - len_mins[code];
-    bit_data &= (1 << bit_count) - 1;
-    if (bits) *bits = bit_data;
-    
-    //printf("giving code %d and bits %d (len %d) for length %d\n", code, bit_data, bit_count, len);
+    if (bits)
+    {
+        assert(bit_data < (1 << bit_count));
+        *bits = bit_data;
+    }
 }
 
 static void dist_get_info(size_t dist, uint16_t * arg_code, uint16_t * arg_bit_count, uint16_t * bits)
 {
     uint16_t dist_mins[30] = {1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
+    assert(dist >= dist_mins[0]);
     uint16_t code = 29;
     for (size_t i = 0; i < 30; i += 1)
     {
         if (dist < dist_mins[i])
-        {
-            code = i - 1;
             break;
-        }
+        code = i;
     }
     if (arg_code) *arg_code = code;
     if (bits) *bits = 0;
     if (arg_bit_count) *arg_bit_count = 0;
     if (dist <= 4)
-    {
-        //printf("giving code %d (no bits) for dist %d\n", code, dist);
         return;
-    }
     
-    *arg_code = code;
     uint16_t bit_count = code >= 4 ? (code - 2) / 2 : 0;
     if (arg_bit_count) *arg_bit_count = bit_count;
     uint16_t bit_data = dist - dist_mins[code];
-    bit_data &= (1 << bit_count) - 1;
-    if (bits) *bits = bit_data;
-    
-    //printf("giving code %d and bits %d (len %d) for dist %d (note: %d)\n", code, bit_data, bit_count, dist, dist - dist_mins[code]);
+    if (bits)
+    {
+        assert(bit_data < (1 << bit_count));
+        *bits = bit_data;
+    }
 }
-static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t quality_level)
+
+static uint32_t compute_adler32(const uint8_t * data, size_t size)
+{
+    uint32_t a = 1;
+    uint32_t b = 0;
+    for (size_t i = 0; i < size; i += 1)
+    {
+        a = (a + data[i]) % 65521;
+        b = (b + a) % 65521;
+    }
+    return (b << 16) | a;
+}
+static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t quality_level, uint8_t zlib_mode)
 {
     if (quality_level > 12)
         quality_level = 12;
@@ -547,10 +556,17 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
     bit_buffer ret;
     memset(&ret, 0, sizeof(bit_buffer));
     
-    uint64_t i = 0;
-    uint64_t lb_size = 0;
-    uint64_t lb_loc = 0;
+    if (zlib_mode)
+    {
+        // standard deflate
+        bits_push(&ret, 0x78, 8);
+        // default compression strength
+        bits_push(&ret, 0x9C, 8);
+    }
     
+    uint32_t checksum = compute_adler32(input, input_len);
+    
+    uint64_t i = 0;
     // Split up into chunks, so that each chunk can have a more ideal huffman code.
     // The chunk size is arbitrary.
     // Each chunk is prefixed with a byte-aligned 32-bit integer giving the number of output tokens in the chunk.
@@ -563,11 +579,30 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
     uint64_t * commands = (uint64_t *)DEFL_MALLOC(sizeof(uint64_t) * chunk_max_commands * 4);
     size_t command_count = 0;
     
+    // store only
+    if (quality_level == 0)
+    {
+        while (i < input_len)
+        {
+            bit_push(&ret, 0); // not the final chunk
+            bits_push(&ret, 0, 2); // uncompressed chunk
+            bits_align_to_byte(&ret);
+            size_t amount = input_len - i;
+            if (amount > 0xFFFF)
+                amount = 0xFFFF;
+            bits_push(&ret, amount, 16);
+            bits_push(&ret, ~amount, 16);
+            
+            bytes_push(&ret.buffer, &input[i], amount);
+            ret.byte_index += amount;
+            i += amount;
+        }
+        
+    }
     while (i < input_len)
     {
-        // the bit buffer is forcibly aligned to the byte at the start of each chunk
-        if (ret.bit_index != 0)
-            ret.bit_index = 8;
+        uint64_t lb_size = 0;
+        uint64_t lb_loc = 0;
         
         memset(commands, 0, sizeof(uint64_t) * chunk_max_commands * 4);
         command_count = 0;
@@ -614,14 +649,15 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
                 size += 1;
             }
             
-            if (size > input_len - i)
-                size = input_len - i;
+            assert(size <= input_len - i);
+            assert(lb_size <= 258);
             
             literal_count += size;
             
             // check for literal
             if (size != 0)
             {
+                //printf("producing literal with size %d\n", size);
                 commands[command_count * 4 + 0] = size;
                 commands[command_count * 4 + 1] = (uint64_t)&input[i];
                 
@@ -634,6 +670,8 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
             {
                 uint64_t dist = i - lb_loc;
                 assert(dist <= i);
+                
+                //printf("producing lookback with size %d and dist %d\n", lb_size, dist);
                 
                 uint16_t size_code = 0;
                 len_get_info(lb_size, &size_code, 0, 0);
@@ -678,6 +716,8 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
         huff_node_t * dist_dict[32] = {0};
         huff_node_t * dist_root_to_free = 0;
         gen_canonical_code(dist_counts, dist_unordered_dict, dist_dict, &dist_root_to_free, 32);
+        
+        printf("chunk starting at %08X:%d\n", ret.byte_index, ret.bit_index);
         
         bit_push(&ret, 0); // not the final chunk
         bits_push(&ret, 2, 2); // dynamic huffman chunk
@@ -724,7 +764,10 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
             }
         }
         huff_node_t * lit_node = dict[256];
+        printf("pushing code 0x%X with length %d\n", lit_node->code, lit_node->code_len);
         bits_push(&ret, lit_node->code, lit_node->code_len);
+        
+        printf("chunk ended at %08X:%d\n", ret.byte_index, ret.bit_index);
         
         if (root_to_free)
             free_huff_nodes(root_to_free);
@@ -747,6 +790,11 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
     bits_push(&ret, 0, 16); // zero length
     bits_push(&ret, 0xFFFF, 16); // zero length (one's complement)
     
+    if (zlib_mode)
+    {
+        bits_align_to_byte(&ret);
+        bits_push(&ret, byteswap_int(checksum, 4), 32);
+    }
     //printf("-- addr %08llX\n", (unsigned long long)ret.byte_index);
     
     //puts("-- wrote final block!");

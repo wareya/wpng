@@ -26,7 +26,7 @@ void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_le
         min += min + (len_count[i] << 1); // not a typo
         if (min < old_min)
             min = 0xFFFF;
-        printf("giving count cap value %d to code length %d (length %d has count %d)\n", min, i+1, i, len_count[i]);
+        //printf("giving count cap value %d to code length %d (length %d has count %d)\n", min, i+1, i, len_count[i]);
         ASSERT_OR_BROKEN_FILE(min <= (1 << (i + 1)),)
         code_by_len[i + 1] = min;
     }
@@ -36,7 +36,7 @@ void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_le
         if (len)
         {
             uint16_t code = code_by_len[len]++;
-            printf("assigning code %02X to value %d\n", code, val);
+            //printf("assigning code %02X to value %d\n", code, val);
             code_lits[code] = val;
         }
     }
@@ -105,7 +105,7 @@ void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits, uint16
 byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
 {
     byte_buffer ret = {0, 0, 0, 0};
-    bit_buffer input = {*input_bytes, 0, 0};
+    bit_buffer input = {*input_bytes, input_bytes->cur, 0};
     
     uint16_t static_lits[1 << 9];
     memset(static_lits, 0, sizeof(uint16_t) * (1 << 9));
@@ -135,7 +135,7 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
     
     while(1)
     {
-        //puts("-- starting a block!");
+        printf("-- starting a block at %08X:%d\n", input.byte_index, input.bit_index);
         uint8_t final = bit_pop(&input);
         uint8_t type = bits_pop(&input, 2);
         //if (final)
@@ -149,9 +149,9 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             
             //printf("literal len: %d\n", len);
             ASSERT_OR_BROKEN_FILE(len == (uint16_t)~nlen, ret)
-            ASSERT_OR_BROKEN_FILE(input.byte_index + len <= input.buffer.len, ret)
+            ASSERT_OR_BROKEN_FILE(input.byte_index + 1 + len <= input.buffer.len, ret)
             
-            bytes_push(&ret, &input.buffer.data[input.byte_index], len);
+            bytes_push(&ret, &input.buffer.data[input.byte_index + 1], len);
             input.byte_index += len;
         }
         else if (type == 1)

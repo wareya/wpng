@@ -80,8 +80,29 @@ typedef struct {
     uint8_t bit_index;
 } bit_buffer;
 
+static inline void bit_push(bit_buffer * buf, uint8_t data)
+{
+    if (buf->bit_index >= 8 || buf->buffer.len == 0)
+    {
+        byte_push(&buf->buffer, 0);
+        if (buf->bit_index >= 8)
+        {
+            buf->byte_index += 1;
+            buf->bit_index -= 8;
+        }
+    }
+    buf->buffer.data[buf->byte_index] |= data << buf->bit_index;
+    buf->bit_index += 1;
+}
 static inline void bits_push(bit_buffer * buf, uint64_t data, uint8_t bits)
 {
+    for (uint8_t n = 0; n < bits; n += 1)
+    {
+        bit_push(buf, data & 1);
+        data >>= 1;
+    }
+    return;
+    
     if (bits == 0)
         return;
     
@@ -136,20 +157,6 @@ static inline void bits_push(bit_buffer * buf, uint64_t data, uint8_t bits)
         buf->bit_index += bits;
         return;
     }
-}
-static inline void bit_push(bit_buffer * buf, uint8_t data)
-{
-    if (buf->bit_index >= 8 || buf->buffer.len == 0)
-    {
-        byte_push(&buf->buffer, 0);
-        if (buf->bit_index >= 8)
-        {
-            buf->byte_index += 1;
-            buf->bit_index -= 8;
-        }
-    }
-    buf->buffer.data[buf->byte_index] |= data << buf->bit_index;
-    buf->bit_index += 1;
 }
 static inline uint64_t bits_pop(bit_buffer * buf, uint8_t bits)
 {

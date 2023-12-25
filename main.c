@@ -4,9 +4,6 @@
 #include <string.h>
 #include <assert.h>
 
-//#define SINFL_IMPLEMENTATION
-//#include "sinfl.h"
-
 #include "inflate.h"
 #include "deflate.h"
 
@@ -15,29 +12,86 @@
 
 #include "buffers.h"
 
-void cb_bytes_push(void * userdata, const unsigned char * bytes, size_t count)
+uint32_t compute_crc32(const uint8_t * data, size_t size, uint32_t init)
 {
-    bytes_push((byte_buffer *)userdata, bytes, count);
-}
-void cb_bytes_copy(void * userdata, size_t distance, size_t count)
-{
-    byte_buffer * buf = (byte_buffer *)userdata;
-    if (distance > buf->len)
-        return;
-    for (size_t i = 0; i < count; i += 1)
-        byte_push(buf, buf->data[buf->len - distance]);
-}
-void cb_verify_checksum(void * userdata, unsigned (*checksummer)(const unsigned char *, size_t), size_t count, unsigned expected_checksum)
-{
-    byte_buffer * buf = (byte_buffer *)userdata;
-    uint32_t actual_checksum = checksummer(buf->data, count < buf->len ? count : buf->len);
-    if (expected_checksum != actual_checksum)
+    uint32_t crc_table[256] = {0};
+
+    for (size_t i = 0; i < 256; i += 1)
     {
-        printf("checksums %08X and %08X don't match!!!\n", expected_checksum, actual_checksum);
-        printf("%lld %lld %lld\n", buf->len, count, (size_t)userdata);
+        uint32_t c = i;
+        for (size_t j = 0; j < 8; j += 1)
+            c = (c >> 1) ^ ((c & 1) ? 0xEDB88320 : 0);
+        crc_table[i] = c;
     }
+    
+    init ^= 0xFFFFFFFF;
+    for (size_t i = 0; i < size; i += 1)
+        init = crc_table[(init ^ data[i]) & 0xFF] ^ (init >> 8);
+    
+    return init ^ 0xFFFFFFFF;
 }
 
+void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t  * image_data, size_t bytes_per_scanline)
+{
+    byte_buffer out;
+    memset(&out, 0, sizeof(byte_buffer));
+    
+    bytes_push(&out, (const uint8_t *)"\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", 8);
+    
+    // write header chunk
+    
+    bytes_push_int(&out, byteswap_int(13, 4), 4);
+    size_t chunk_start = out.len;
+    bytes_push(&out, (const uint8_t *)"IHDR", 4);
+    bytes_push_int(&out, byteswap_int(width, 4), 4);
+    bytes_push_int(&out, byteswap_int(height, 4), 4);
+    byte_push(&out, 8);
+    byte_push(&out, bpp == 1 ? 0 : bpp == 2 ? 4 : bpp == 3 ? 2 : bpp == 4 ? 6 : 0);
+    byte_push(&out, 0); // compression method (deflate)
+    byte_push(&out, 0); // filter method (adaptive x5)
+    byte_push(&out, 0); // interlacing method (none)
+    size_t chunk_size = out.len - chunk_start;
+    bytes_push_int(&out, byteswap_int(compute_crc32(&out.data[chunk_start], chunk_size, 0), 4), 4);
+    
+    // write IDAT chunks
+    // first, collect pixel data
+    byte_buffer pixel_data;
+    memset(&pixel_data, 0, sizeof(pixel_data));
+    for (size_t y = 0; y < height; y += 1)
+    {
+        byte_push(&pixel_data, 0); // no filter
+        size_t start = bytes_per_scanline * y;
+        for (size_t x = 0; x < width * bpp; x += bpp)
+            bytes_push(&pixel_data, &image_data[start + x], bpp);
+    }
+    printf("raw pixel data byte count: %lld\n", pixel_data.len);
+    bit_buffer pixel_data_comp = do_deflate(pixel_data.data, pixel_data.len, 12, 1);
+    
+    bytes_push_int(&out, byteswap_int(pixel_data_comp.buffer.len, 4), 4);
+    chunk_start = out.len;
+    bytes_push(&out, (const uint8_t *)"IDAT", 4);
+    bytes_push(&out, pixel_data_comp.buffer.data, pixel_data_comp.buffer.len);
+    chunk_size = out.len - chunk_start;
+    bytes_push_int(&out, byteswap_int(compute_crc32(&out.data[chunk_start], chunk_size, 0), 4), 4);
+    
+    bytes_push_int(&out, 0, 4);
+    bytes_push(&out, (const uint8_t *)"IEND\xAE\x42\x60\x82", 8);
+    
+    FILE * f = fopen(filename, "wb");
+    
+    fseek(f, 0, SEEK_END);
+    size_t file_len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    fwrite(out.data, out.len, 1, f);
+    
+    fclose(f);
+    
+    printf("bpp %d\n", bpp);
+    
+    puts("saved");
+}
+    
 void wpng_load_and_save(byte_buffer * buf)
 {
 	if (buf->len < 8)
@@ -157,12 +211,14 @@ void wpng_load_and_save(byte_buffer * buf)
         }
     }
     
-    stbi_write_png("out.png", width, height, bpp, image_data, width * bpp);
+    wpng_write("out.png", width, height, bpp, image_data, width * bpp);
 }
 
 int main()
 {
-    if (0)
+    compute_crc32(0, 0, 0);
+    
+    if (1)
     {
         //FILE * f = fopen("unifont-jp.png", "rb");
         FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
@@ -179,22 +235,26 @@ int main()
         
         wpng_load_and_save(&in_buf);
     }
-    
-    const char * test = "Ah, to be human. A pitiful thing. Come, I will bring to you oblivion, and pass upon you the Gnosis.";
-    
-    puts("compressing...");
-    bit_buffer comp = do_deflate((const uint8_t *)test, strlen(test) + 1, 12);
-    for (size_t i = 0; i < comp.buffer.len; i++)
-        printf("%02X ", comp.buffer.data[i]);
-    puts("");
-    int error = 0;
-    puts("decompressing...");
-    byte_buffer decomp = do_inflate(&comp.buffer, &error);
-    printf("%d\n", error);
-    printf("%s\n", decomp.data);
-    /*
+    if (0)
     {
-        FILE * f = fopen("pyout2.bin", "rb");
+        const char * test = "When I waked it was broad day, the weather clear, and the storm abated, so that the sea did not rage and swell as before. But that which surprised me most was, that the ship was lifted off in the night from the sand where she lay by the swelling of the tide, and was driven up almost as far as the rock which I at first mentioned, where I had been so bruised by the wave dashing me against it. This being within about a mile from the shore where I was, and the ship seeming to stand upright still, I wished myself on board, that at least I might save some necessary things for my use.";
+        
+        puts("compressing...");
+        bit_buffer comp = do_deflate((const uint8_t *)test, strlen(test) + 1, 12, 1);
+        for (size_t i = 0; i < comp.buffer.len; i++)
+            printf("%02X ", comp.buffer.data[i]);
+        puts("");
+        int error = 0;
+        puts("decompressing...");
+        comp.buffer.cur = 2;
+        byte_buffer decomp = do_inflate(&comp.buffer, &error);
+        printf("%d\n", error);
+        printf("%s\n", decomp.data);
+    }
+    if (0)
+    {
+        // error 0x19B0ish (around 19BA)
+        FILE * f = fopen("test text.txt", "rb");
         
         fseek(f, 0, SEEK_END);
         size_t file_len = ftell(f);
@@ -207,12 +267,18 @@ int main()
         fclose(f);
         
         int error = 0;
-        byte_buffer dec = do_inflate(&in_buf, &error); // decompresses into `dec` (declared earlier)
-        dec.cur = 0;
+        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 1, 1); // compresses into `dec` (declared earlier)
+        
+        FILE * f2 = fopen("test_out_2", "wb");
+        fwrite(comp.buffer.data, comp.buffer.len, 1, f);
+        fclose(f);
+        
+        comp.buffer.cur = 2;
+        byte_buffer decomp = do_inflate(&comp.buffer, &error);
+        
         printf("%d\n", error);
-        for (size_t i = 0; i < dec.len; i += 1)
-            printf("%02X ", dec.data[i]);
+        printf("%s\n", decomp.data);
+        
     }
-    */
 	return 0;
 }
