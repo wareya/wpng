@@ -38,6 +38,7 @@ void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_le
             uint16_t code = code_by_len[len]++;
             //printf("assigning code %02X to value %d\n", code, val);
             code_lits[code] = val;
+            printf("reading: code %04X (len %d) has symbol %d\n", code, len, val);
         }
     }
 }
@@ -135,7 +136,7 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
     
     while(1)
     {
-        //printf("-- starting a block at %08X:%d\n", input.byte_index, input.bit_index);
+        printf("-- starting a block at %08X:%d\n", input.byte_index, input.bit_index);
         uint8_t final = bit_pop(&input);
         uint8_t type = bits_pop(&input, 2);
         //if (final)
@@ -228,6 +229,8 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             memcpy(dist_code_lens, &raw_code_lens[len_count], dist_count);
             build_code(dist_code_lens, dist_code_lits, dist_code_by_len, 32, &code_error);
             ASSERT_OR_BROKEN_FILE(code_error == 0, ret)
+            
+            printf("-- finished reading huff at %08X:%d\n", input.byte_index, input.bit_index);
             
             int lz77_error = 0;
             do_lz77(&input, &ret, code_lits, code_by_len, dist_code_lits, dist_code_by_len, &lz77_error);

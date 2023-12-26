@@ -7,29 +7,12 @@
 #include "inflate.h"
 #include "deflate.h"
 
+/*
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+*/
 
 #include "buffers.h"
-
-uint32_t compute_crc32(const uint8_t * data, size_t size, uint32_t init)
-{
-    uint32_t crc_table[256] = {0};
-
-    for (size_t i = 0; i < 256; i += 1)
-    {
-        uint32_t c = i;
-        for (size_t j = 0; j < 8; j += 1)
-            c = (c >> 1) ^ ((c & 1) ? 0xEDB88320 : 0);
-        crc_table[i] = c;
-    }
-    
-    init ^= 0xFFFFFFFF;
-    for (size_t i = 0; i < size; i += 1)
-        init = crc_table[(init ^ data[i]) & 0xFF] ^ (init >> 8);
-    
-    return init ^ 0xFFFFFFFF;
-}
 
 void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t  * image_data, size_t bytes_per_scanline)
 {
@@ -254,7 +237,7 @@ int main()
     if (1)
     {
         // error 0x19B0ish (around 19BA)
-        FILE * f = fopen("moby dick.txt", "rb");
+        FILE * f = fopen("unifont-jp.tga", "rb");
         
         fseek(f, 0, SEEK_END);
         size_t file_len = ftell(f);
@@ -267,9 +250,9 @@ int main()
         fclose(f);
         
         int error = 0;
-        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 12, 1); // compresses into `dec` (declared earlier)
+        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 1, 1); // compresses into `dec` (declared earlier)
         
-        FILE * f2 = fopen("moby dick.txt.comp", "wb");
+        FILE * f2 = fopen("unifont-jp.tga.w.zlib", "wb");
         fwrite(comp.buffer.data, comp.buffer.len, 1, f);
         fclose(f);
         
@@ -277,6 +260,26 @@ int main()
         byte_buffer decomp = do_inflate(&comp.buffer, &error);
         
         //printf("%d\n", error);
+        //printf("%s\n", decomp.data);
+        
+    }
+    if (0)
+    {
+        // error 0x19B0ish (around 19BA)
+        FILE * f = fopen("unifont-jp.tga.gz.raw", "rb");
+        
+        fseek(f, 0, SEEK_END);
+        size_t file_len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        
+        uint8_t * raw_data = (uint8_t *)malloc(file_len);
+        fread(raw_data, file_len, 1, f);
+        byte_buffer in_buf = {raw_data, file_len, file_len, 0};
+        
+        int error = 0;
+        byte_buffer decomp = do_inflate(&in_buf, &error);
+        
+        printf("%d\n", error);
         //printf("%s\n", decomp.data);
         
     }
