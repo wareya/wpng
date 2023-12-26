@@ -111,20 +111,19 @@ static inline uint64_t hashmap_get(defl_hashmap * hashmap, size_t i, const uint8
             uint64_t size = 0;
             
             size_t d = 1;
-            while (value > 0 && input[i - d] == input[value - 1] && d <= pre_context)
+            while (value > 0 && input[i - d] == input[value - 1] && d <= pre_context && d < 200)
             {
                 value -= 1;
-                size += 1;
                 remaining += 1;
                 d += 1;
             }
             d -= 1;
             
-            while (size < 258 && size < remaining && input[i + size] == input[value + size])
+            while (size + d < 258 && size < remaining && input[i + size] == input[value + d + size])
                 size += 1;
             
-            if (size > 258)
-                size = 258;
+            if (size > 258 - d)
+                size = 258 - d;
             
             // bad heuristic for "is it worth it?"
             if (size > best_size)
@@ -486,7 +485,7 @@ static void huff_write_code_desc(bit_buffer * ret, huff_node_t ** dict, huff_nod
             else
                 bits_push(ret, bitswap(lens[i] - 1, 4), 4);
         }
-        printf("writing: code %04X (len %d) has symbol %d\n", dict[i] ? dict[i]->code : 0, dict[i] ? dict[i]->code_len : 0, i);
+        //printf("writing: code %04X (len %d) has symbol %d\n", dict[i] ? dict[i]->code : 0, dict[i] ? dict[i]->code_len : 0, i);
     }
 }
 
@@ -545,7 +544,7 @@ static void dist_get_info(size_t dist, uint16_t * arg_code, uint16_t * arg_bit_c
     }
 }
 
-static uint32_t compute_adler32(const uint8_t * data, size_t size)
+static uint32_t defl_compute_adler32(const uint8_t * data, size_t size)
 {
     uint32_t a = 1;
     uint32_t b = 0;
@@ -557,7 +556,7 @@ static uint32_t compute_adler32(const uint8_t * data, size_t size)
     return (b << 16) | a;
 }
 
-static uint32_t compute_crc32(const uint8_t * data, size_t size, uint32_t init)
+static uint32_t defl_compute_crc32(const uint8_t * data, size_t size, uint32_t init)
 {
     uint32_t crc_table[256] = {0};
 
@@ -622,7 +621,7 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
         bits_push(&ret, 0xFF, 8);
     }
     
-    uint32_t checksum = header_mode ? header_mode == 1 ? compute_adler32(input, input_len) : compute_crc32(input, input_len, 0) : 0;
+    uint32_t checksum = header_mode ? header_mode == 1 ? defl_compute_adler32(input, input_len) : defl_compute_crc32(input, input_len, 0) : 0;
     
     uint64_t i = 0;
     // Split up into chunks, so that each chunk can have a more ideal huffman code.
@@ -697,6 +696,8 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
                     }
                     if (lb_size != 0)
                     {
+                        if (i == 0x56FD)
+                            printf("%d\n", back_distance);
                         size -= back_distance;
                         break;
                     }
@@ -708,7 +709,8 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
             }
             
             assert(size <= input_len - i);
-            assert(lb_size <= 258);
+            if (lb_size > 258)
+                lb_size = 258;
             
             literal_count += size;
             
@@ -752,6 +754,8 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
                 if (start_i + DEFL_HASH_LENGTH < input_len)
                     hashmap_insert(&hashmap, &input[start_i], start_i);
                 
+                if (start_i < 0x5705 && i >= 0x5705)
+                    printf("0x5705 was %d len %d dist (starting at %08X, source %08X)\n", lb_size, dist, start_i, start_i - dist);
                 lb_size = 0;
             }
             command_count += 1;
@@ -780,7 +784,7 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
         
         huff_write_code_desc(&ret, dict, dist_dict);
         
-        printf("huff desc ended at %08X:%d\n", ret.byte_index, ret.bit_index);
+        //printf("huff desc ended at %08X:%d\n", ret.byte_index, ret.bit_index);
         
         for (size_t j = 0; j < command_count; j++)
         {
@@ -828,7 +832,7 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
         //printf("pushing code 0x%X with length %d\n", lit_node->code, lit_node->code_len);
         bits_push(&ret, lit_node->code, lit_node->code_len);
         
-        printf("chunk ended at %08X:%d\n", ret.byte_index, ret.bit_index);
+        //printf("chunk ended at %08X:%d\n", ret.byte_index, ret.bit_index);
         
         if (root_to_free)
             free_huff_nodes(root_to_free);

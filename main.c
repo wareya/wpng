@@ -34,7 +34,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     byte_push(&out, 0); // filter method (adaptive x5)
     byte_push(&out, 0); // interlacing method (none)
     size_t chunk_size = out.len - chunk_start;
-    bytes_push_int(&out, byteswap_int(compute_crc32(&out.data[chunk_start], chunk_size, 0), 4), 4);
+    bytes_push_int(&out, byteswap_int(defl_compute_crc32(&out.data[chunk_start], chunk_size, 0), 4), 4);
     
     // write IDAT chunks
     // first, collect pixel data
@@ -55,7 +55,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     bytes_push(&out, (const uint8_t *)"IDAT", 4);
     bytes_push(&out, pixel_data_comp.buffer.data, pixel_data_comp.buffer.len);
     chunk_size = out.len - chunk_start;
-    bytes_push_int(&out, byteswap_int(compute_crc32(&out.data[chunk_start], chunk_size, 0), 4), 4);
+    bytes_push_int(&out, byteswap_int(defl_compute_crc32(&out.data[chunk_start], chunk_size, 0), 4), 4);
     
     bytes_push_int(&out, 0, 4);
     bytes_push(&out, (const uint8_t *)"IEND\xAE\x42\x60\x82", 8);
@@ -131,9 +131,9 @@ void wpng_load_and_save(byte_buffer * buf)
     uint8_t temp = color_type / 2;
     uint8_t bpp = (((temp & 1) << 1) + ((temp & 2) >> 1)) + 1;
     
-    byte_buffer buf2 = {&idat.data[2], idat.len - 6, idat.len - 6, 0};
+    idat.cur = 0;
     int error = 0;
-    byte_buffer dec = do_inflate(&buf2, &error); // decompresses into `dec` (declared earlier)
+    byte_buffer dec = do_inflate(&idat, &error, 1); // decompresses into `dec` (declared earlier)
     dec.cur = 0;
     printf("%d\n", error);
     
@@ -199,7 +199,7 @@ void wpng_load_and_save(byte_buffer * buf)
 
 int main()
 {
-    compute_crc32(0, 0, 0);
+    defl_compute_crc32(0, 0, 0);
     
     if (0)
     {
@@ -230,7 +230,7 @@ int main()
         int error = 0;
         puts("decompressing...");
         comp.buffer.cur = 2;
-        byte_buffer decomp = do_inflate(&comp.buffer, &error);
+        byte_buffer decomp = do_inflate(&comp.buffer, &error, 0);
         printf("%d\n", error);
         printf("%s\n", decomp.data);
     }
@@ -249,16 +249,18 @@ int main()
         
         fclose(f);
         
-        int error = 0;
-        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 1, 1); // compresses into `dec` (declared earlier)
+        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 5, 1); // compresses into `dec` (declared earlier)
         
-        FILE * f2 = fopen("unifont-jp.tga.w.zlib", "wb");
+        FILE * f2 = fopen("unifont-jp.tga.w.gzip", "wb");
         fwrite(comp.buffer.data, comp.buffer.len, 1, f);
-        fclose(f);
+        fclose(f2);
         
-        comp.buffer.cur = 2;
-        byte_buffer decomp = do_inflate(&comp.buffer, &error);
-        
+        int error = 0;
+        byte_buffer decomp = do_inflate(&comp.buffer, &error, 1);
+                
+        FILE * f3 = fopen("unifont-jp.tga.w", "wb");
+        fwrite(decomp.data, decomp.len, 1, f);
+        fclose(f3);
         //printf("%d\n", error);
         //printf("%s\n", decomp.data);
         
@@ -277,7 +279,7 @@ int main()
         byte_buffer in_buf = {raw_data, file_len, file_len, 0};
         
         int error = 0;
-        byte_buffer decomp = do_inflate(&in_buf, &error);
+        byte_buffer decomp = do_inflate(&in_buf, &error, 0);
         
         printf("%d\n", error);
         //printf("%s\n", decomp.data);

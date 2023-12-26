@@ -9,6 +9,18 @@
 #define ASSERT_OR_BROKEN_FILE(expr,ret) { if (!(expr)) { *error = -1; printf("assert failed on line %d\n", __LINE__); return ret; } }
 #define ASSERT_OR_BROKEN_DECODER(expr,ret) { if (!(expr)) { *error = 1; printf("assert failed on line %d\n", __LINE__); return ret; } }
 
+static uint32_t infl_compute_adler32(const uint8_t * data, size_t size)
+{
+    uint32_t a = 1;
+    uint32_t b = 0;
+    for (size_t i = 0; i < size; i += 1)
+    {
+        a = (a + data[i]) % 65521;
+        b = (b + a) % 65521;
+    }
+    return (b << 16) | a;
+}
+
 void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_len, size_t total_count, int * error)
 {
     uint16_t min = 0;
@@ -38,7 +50,7 @@ void build_code(uint8_t * code_lens, uint16_t * code_lits, uint16_t * code_by_le
             uint16_t code = code_by_len[len]++;
             //printf("assigning code %02X to value %d\n", code, val);
             code_lits[code] = val;
-            printf("reading: code %04X (len %d) has symbol %d\n", code, len, val);
+            //printf("reading: code %04X (len %d) has symbol %d\n", code, len, val);
         }
     }
 }
@@ -89,8 +101,13 @@ void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits, uint16
             uint16_t dist = dist_mins[dist_literal] + bits_pop(input, dist_extra_bits);
             ASSERT_OR_BROKEN_FILE(dist <= ret->len,)
             
+            size_t start_len = ret->len;
             for (size_t j = 0; j < len; j++)
+            {
                 byte_push(ret, ret->data[ret->len - dist]);
+                if (ret->len == 0x5705)
+                    printf("0x5705 was %d len %d dist (starting at %08X, source %08X)\n", len, dist, start_len, start_len - dist);
+            }
         }
         else
             break;
@@ -103,7 +120,7 @@ void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits, uint16
 // on error, error is set to nonzero. otherwise error is unset
 // positive error: bug in decoder
 // negative error: broken DEFLATE data
-byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
+byte_buffer do_inflate(byte_buffer * input_bytes, int * error, uint8_t header_mode)
 {
     byte_buffer ret = {0, 0, 0, 0};
     bit_buffer input = {*input_bytes, input_bytes->cur, 0};
@@ -134,9 +151,12 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
     memset(static_dists_by_len, 0, sizeof(uint16_t) * 16);
     static_dists_by_len[5] = 0xFFFF;
     
+    if (header_mode == 1)
+        bits_pop(&input, 16);
+    
     while(1)
     {
-        printf("-- starting a block at %08X:%d\n", input.byte_index, input.bit_index);
+        //printf("-- starting a block at %08X:%d\n", input.byte_index, input.bit_index);
         uint8_t final = bit_pop(&input);
         uint8_t type = bits_pop(&input, 2);
         //if (final)
@@ -230,7 +250,7 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
             build_code(dist_code_lens, dist_code_lits, dist_code_by_len, 32, &code_error);
             ASSERT_OR_BROKEN_FILE(code_error == 0, ret)
             
-            printf("-- finished reading huff at %08X:%d\n", input.byte_index, input.bit_index);
+            //printf("-- finished reading huff at %08X:%d\n", input.byte_index, input.bit_index);
             
             int lz77_error = 0;
             do_lz77(&input, &ret, code_lits, code_by_len, dist_code_lits, dist_code_by_len, &lz77_error);
@@ -247,6 +267,16 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error)
         
         if (final)
             break;
+    }
+    
+    if (header_mode == 1)
+    {
+        bits_align_to_byte(&input);
+        //printf("-- literal addr %08llX\n", (unsigned long long)input.byte_index);
+        uint32_t expected_checksum = byteswap_int(bits_pop(&input, 32), 4);
+        uint32_t checksum = infl_compute_adler32(ret.data, ret.len);
+        printf("%08X %08X\n", expected_checksum, checksum);
+        ASSERT_OR_BROKEN_FILE(expected_checksum == checksum, ret)
     }
     
     return ret;
