@@ -101,13 +101,8 @@ void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits, uint16
             uint16_t dist = dist_mins[dist_literal] + bits_pop(input, dist_extra_bits);
             ASSERT_OR_BROKEN_FILE(dist <= ret->len,)
             
-            size_t start_len = ret->len;
             for (size_t j = 0; j < len; j++)
-            {
                 byte_push(ret, ret->data[ret->len - dist]);
-                if (ret->len == 0x5705)
-                    printf("0x5705 was %d len %d dist (starting at %08X, source %08X)\n", len, dist, start_len, start_len - dist);
-            }
         }
         else
             break;
@@ -275,7 +270,6 @@ byte_buffer do_inflate(byte_buffer * input_bytes, int * error, uint8_t header_mo
         //printf("-- literal addr %08llX\n", (unsigned long long)input.byte_index);
         uint32_t expected_checksum = byteswap_int(bits_pop(&input, 32), 4);
         uint32_t checksum = infl_compute_adler32(ret.data, ret.len);
-        printf("%08X %08X\n", expected_checksum, checksum);
         ASSERT_OR_BROKEN_FILE(expected_checksum == checksum, ret)
     }
     

@@ -696,8 +696,6 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
                     }
                     if (lb_size != 0)
                     {
-                        if (i == 0x56FD)
-                            printf("%d\n", back_distance);
                         size -= back_distance;
                         break;
                     }
@@ -754,8 +752,6 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
                 if (start_i + DEFL_HASH_LENGTH < input_len)
                     hashmap_insert(&hashmap, &input[start_i], start_i);
                 
-                if (start_i < 0x5705 && i >= 0x5705)
-                    printf("0x5705 was %d len %d dist (starting at %08X, source %08X)\n", lb_size, dist, start_i, start_i - dist);
                 lb_size = 0;
             }
             command_count += 1;
