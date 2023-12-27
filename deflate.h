@@ -583,7 +583,7 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
     if (quality_level > 12)
         quality_level = 12;
     if (quality_level < -12)
-        quality_level = 12;
+        quality_level = -12;
     
     defl_hashmap hashmap;
     hashmap.hashtable = (uint32_t *)DEFL_MALLOC(sizeof(uint32_t *) * (1 << DEFL_HASH_SIZE));
