@@ -218,7 +218,7 @@ int main()
         
         wpng_load_and_save(&in_buf);
     }
-    if (0)
+    if (1)
     {
         const char * test = "When I waked it was broad day, the weather clear, and the storm abated, so that the sea did not rage and swell as before. But that which surprised me most was, that the ship was lifted off in the night from the sand where she lay by the swelling of the tide, and was driven up almost as far as the rock which I at first mentioned, where I had been so bruised by the wave dashing me against it. This being within about a mile from the shore where I was, and the ship seeming to stand upright still, I wished myself on board, that at least I might save some necessary things for my use.";
         
@@ -229,14 +229,14 @@ int main()
         puts("");
         int error = 0;
         puts("decompressing...");
-        comp.buffer.cur = 2;
-        byte_buffer decomp = do_inflate(&comp.buffer, &error, 0);
+        byte_buffer decomp = do_inflate(&comp.buffer, &error, 1);
         printf("%d\n", error);
         printf("%s\n", decomp.data);
     }
-    if (1)
+    if (0)
     {
         // error 0x19B0ish (around 19BA)
+        //FILE * f = fopen("unifont-jp.tga", "rb");
         FILE * f = fopen("unifont-jp.tga", "rb");
         
         fseek(f, 0, SEEK_END);
@@ -249,9 +249,9 @@ int main()
         
         fclose(f);
         
-        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 5, 1); // compresses into `dec` (declared earlier)
+        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 12, 1); // compresses into `dec` (declared earlier)
         
-        FILE * f2 = fopen("unifont-jp.tga.w.gzip", "wb");
+        FILE * f2 = fopen("unifont-jp.tga.w.zlib", "wb");
         fwrite(comp.buffer.data, comp.buffer.len, 1, f);
         fclose(f2);
         
