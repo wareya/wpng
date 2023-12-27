@@ -578,6 +578,7 @@ static uint32_t defl_compute_crc32(const uint8_t * data, size_t size, uint32_t i
     return init ^ 0xFFFFFFFF;
 }
 
+// quality level: from -12 to 12, indicates compression quality. 0 means "store without compressing". the higher the quality, the slower.
 static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t quality_level, uint8_t header_mode)
 {
     if (quality_level > 12)

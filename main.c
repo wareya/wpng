@@ -14,6 +14,29 @@
 
 #include "buffers.h"
 
+uint8_t paeth_get_ref(uint8_t * image_data, uint32_t width, uint32_t x, uint32_t y, uint8_t bpp)
+{
+    int16_t left   = x >= bpp ? image_data[y * width * bpp + x - bpp] : 0;
+    int16_t up     = y >    0 ? image_data[(y - 1) * width * bpp + x] : 0;
+    int16_t upleft = y >    0 &&
+                     x >= bpp ? image_data[(y - 1) * width * bpp + x - bpp] : 0;
+    
+    int16_t lin = left + up - upleft;
+    int16_t diff_left   = abs(lin - left);
+    int16_t diff_up     = abs(lin - up);
+    int16_t diff_upleft = abs(lin - upleft);
+    
+    int16_t ref = 0;
+    if (diff_left <= diff_up && diff_left <= diff_upleft)
+        ref = left;
+    else if (diff_up <= diff_upleft)
+        ref = up;
+    else
+        ref = upleft;
+    
+    return ref;
+}
+
 void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t  * image_data, size_t bytes_per_scanline)
 {
     byte_buffer out;
@@ -40,12 +63,112 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     // first, collect pixel data
     byte_buffer pixel_data;
     memset(&pixel_data, 0, sizeof(pixel_data));
+    uint64_t num_unfiltered = 0;
     for (size_t y = 0; y < height; y += 1)
     {
-        byte_push(&pixel_data, 0); // no filter
+        // pick a filter based on the sum-of-absolutes heuristic
         size_t start = bytes_per_scanline * y;
-        for (size_t x = 0; x < width * bpp; x += bpp)
-            bytes_push(&pixel_data, &image_data[start + x], bpp);
+        
+        uint64_t sum_abs_null = 0;
+        uint64_t sum_abs_left = 0;
+        uint64_t sum_abs_top = -1;
+        uint64_t sum_abs_avg = 0;
+        uint64_t sum_abs_paeth = 0;
+        
+        uint64_t hit_vals[256] = {0};
+        uint8_t most_common_val = 0;
+        uint64_t most_common_count = 0;
+        
+        for (size_t x = 0; x < width * bpp; x++)
+        {
+            uint8_t val = image_data[start + x];
+            hit_vals[val] += 1;
+            if (hit_vals[val] > most_common_count)
+            {
+                most_common_count = hit_vals[val];
+                most_common_val = val;
+            }
+        }
+        
+        for (size_t x = 0; x < width * bpp; x++)
+            sum_abs_null += abs((int32_t)(int8_t)(image_data[start + x] - most_common_val));
+        
+        // bias in favor of storing unfiltered if enough (25%) earlier scanlines are stored unfiltered
+        // this helps with deflate's lz77 pass
+        if (num_unfiltered > y / height / 4)
+            sum_abs_null /= 3;
+        
+        for (size_t x = 0; x < bpp; x++)
+            sum_abs_left += abs((int32_t)(int8_t)(image_data[start + x]));
+        for (size_t x = bpp; x < width * bpp; x++)
+            sum_abs_left += abs((int32_t)(image_data[start + x]) - (int32_t)(image_data[start + x - bpp]));
+        
+        if (y > 0)
+        {
+            sum_abs_top = 0;
+            for (size_t x = 0; x < width * bpp; x++)
+                sum_abs_top += abs((int32_t)(image_data[start + x]) - (int32_t)(image_data[start - bytes_per_scanline + x]));
+        }
+        
+        for (size_t x = 0; x < width * bpp; x++)
+        {
+            uint16_t up   = y >    0 ? image_data[start - bytes_per_scanline + x] : 0;
+            uint16_t left = x >= bpp ? image_data[start + x - bpp] : 0;
+            uint8_t avg = (up + left) / 2;
+            sum_abs_avg += abs((int32_t)(image_data[start + x]) - (int32_t)(avg));
+        }
+        
+        for (size_t x = 0; x < width * bpp; x++)
+        {
+            uint8_t ref = paeth_get_ref(image_data, width, x, y, bpp);
+            sum_abs_paeth += abs((int32_t)(image_data[y * width * bpp + x]) - (int32_t)(ref));
+        }
+        
+        if (sum_abs_null <= sum_abs_left && sum_abs_null <= sum_abs_top && sum_abs_null <= sum_abs_avg && sum_abs_null <= sum_abs_paeth)
+        {
+            num_unfiltered += 1;
+            puts("picked filter mode 0");
+            byte_push(&pixel_data, 0); // no filter
+            bytes_push(&pixel_data, &image_data[start], width * bpp);
+        }
+        else if (sum_abs_left <= sum_abs_top && sum_abs_left <= sum_abs_avg && sum_abs_left <= sum_abs_paeth)
+        {
+            puts("picked filter mode 1");
+            byte_push(&pixel_data, 1); // left filter
+            for (size_t x = 0; x < bpp; x++)
+                byte_push(&pixel_data, image_data[start + x]);
+            for (size_t x = bpp; x < width * bpp; x++)
+                byte_push(&pixel_data, image_data[start + x] - image_data[start + x - bpp]);
+        }
+        else if (sum_abs_top <= sum_abs_avg && sum_abs_top <= sum_abs_paeth)
+        {
+            puts("picked filter mode 2");
+            byte_push(&pixel_data, 2); // top filter
+            for (size_t x = 0; x < width * bpp; x++)
+                byte_push(&pixel_data, image_data[start + x] - image_data[start - bytes_per_scanline + x]);
+        }
+        else if (sum_abs_avg <= sum_abs_paeth)
+        {
+            puts("picked filter mode 3");
+            byte_push(&pixel_data, 3); // avg filter
+            for (size_t x = 0; x < width * bpp; x++)
+            {
+                uint16_t up   = y >    0 ? image_data[start - bytes_per_scanline + x] : 0;
+                uint16_t left = x >= bpp ? image_data[start + x - bpp] : 0;
+                uint8_t avg = (up + left) / 2;
+                byte_push(&pixel_data, image_data[start + x] - avg);
+            }
+        }
+        else
+        {
+            puts("picked filter mode 4");
+            byte_push(&pixel_data, 4); // paeth filter
+            for (size_t x = 0; x < width * bpp; x++)
+            {
+                uint8_t ref = paeth_get_ref(image_data, width, x, y, bpp);
+                byte_push(&pixel_data, image_data[start + x] - ref);
+            }
+        }
     }
     printf("raw pixel data byte count: %lld\n", pixel_data.len);
     bit_buffer pixel_data_comp = do_deflate(pixel_data.data, pixel_data.len, 12, 1);
@@ -61,20 +184,14 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     bytes_push(&out, (const uint8_t *)"IEND\xAE\x42\x60\x82", 8);
     
     FILE * f = fopen(filename, "wb");
-    
-    fseek(f, 0, SEEK_END);
-    size_t file_len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
     fwrite(out.data, out.len, 1, f);
-    
     fclose(f);
     
     printf("bpp %d\n", bpp);
     
     puts("saved");
 }
-    
+
 void wpng_load_and_save(byte_buffer * buf)
 {
 	if (buf->len < 8)
@@ -171,24 +288,7 @@ void wpng_load_and_save(byte_buffer * buf)
         {
             for (size_t x = 0; x < width * bpp; x++)
             {
-                int16_t left   = x >= bpp ? image_data[y * width * bpp + x - bpp] : 0;
-                int16_t up     = y >    0 ? image_data[(y - 1) * width * bpp + x] : 0;
-                int16_t upleft = y >    0 &&
-                                 x >= bpp ? image_data[(y - 1) * width * bpp + x - bpp] : 0;
-                
-                int16_t lin = left + up - upleft;
-                int16_t diff_left   = abs(lin - left);
-                int16_t diff_up     = abs(lin - up);
-                int16_t diff_upleft = abs(lin - upleft);
-                
-                int16_t ref = 0;
-                if (diff_left <= diff_up && diff_left <= diff_upleft)
-                    ref = left;
-                else if (diff_up <= diff_upleft)
-                    ref = up;
-                else
-                    ref = upleft;
-                
+                uint8_t ref = paeth_get_ref(image_data, width, x, y, bpp);
                 image_data[y * width * bpp + x] += ref;
             }
         }
@@ -201,10 +301,11 @@ int main()
 {
     defl_compute_crc32(0, 0, 0);
     
-    if (0)
+    if (1)
     {
         //FILE * f = fopen("unifont-jp.png", "rb");
-        FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
+        FILE * f = fopen("cc0_photo.png", "rb");
+        //FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
         
         fseek(f, 0, SEEK_END);
         size_t file_len = ftell(f);
@@ -218,72 +319,6 @@ int main()
         
         wpng_load_and_save(&in_buf);
     }
-    if (1)
-    {
-        const char * test = "When I waked it was broad day, the weather clear, and the storm abated, so that the sea did not rage and swell as before. But that which surprised me most was, that the ship was lifted off in the night from the sand where she lay by the swelling of the tide, and was driven up almost as far as the rock which I at first mentioned, where I had been so bruised by the wave dashing me against it. This being within about a mile from the shore where I was, and the ship seeming to stand upright still, I wished myself on board, that at least I might save some necessary things for my use.";
-        
-        puts("compressing...");
-        bit_buffer comp = do_deflate((const uint8_t *)test, strlen(test) + 1, 12, 1);
-        for (size_t i = 0; i < comp.buffer.len; i++)
-            printf("%02X ", comp.buffer.data[i]);
-        puts("");
-        int error = 0;
-        puts("decompressing...");
-        byte_buffer decomp = do_inflate(&comp.buffer, &error, 1);
-        printf("%d\n", error);
-        printf("%s\n", decomp.data);
-    }
-    if (0)
-    {
-        // error 0x19B0ish (around 19BA)
-        //FILE * f = fopen("unifont-jp.tga", "rb");
-        FILE * f = fopen("unifont-jp.tga", "rb");
-        
-        fseek(f, 0, SEEK_END);
-        size_t file_len = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        
-        uint8_t * raw_data = (uint8_t *)malloc(file_len);
-        fread(raw_data, file_len, 1, f);
-        byte_buffer in_buf = {raw_data, file_len, file_len, 0};
-        
-        fclose(f);
-        
-        bit_buffer comp = do_deflate(in_buf.data, in_buf.len, 12, 1); // compresses into `dec` (declared earlier)
-        
-        FILE * f2 = fopen("unifont-jp.tga.w.zlib", "wb");
-        fwrite(comp.buffer.data, comp.buffer.len, 1, f);
-        fclose(f2);
-        
-        int error = 0;
-        byte_buffer decomp = do_inflate(&comp.buffer, &error, 1);
-                
-        FILE * f3 = fopen("unifont-jp.tga.w", "wb");
-        fwrite(decomp.data, decomp.len, 1, f);
-        fclose(f3);
-        //printf("%d\n", error);
-        //printf("%s\n", decomp.data);
-        
-    }
-    if (0)
-    {
-        // error 0x19B0ish (around 19BA)
-        FILE * f = fopen("unifont-jp.tga.gz.raw", "rb");
-        
-        fseek(f, 0, SEEK_END);
-        size_t file_len = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        
-        uint8_t * raw_data = (uint8_t *)malloc(file_len);
-        fread(raw_data, file_len, 1, f);
-        byte_buffer in_buf = {raw_data, file_len, file_len, 0};
-        
-        int error = 0;
-        byte_buffer decomp = do_inflate(&in_buf, &error, 0);
-        
-        printf("%d\n", error);
-        //printf("%s\n", decomp.data);
-        
-    }
+    
 	return 0;
 }
