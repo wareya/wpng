@@ -14,12 +14,12 @@
 
 #include "buffers.h"
 
-uint8_t paeth_get_ref(uint8_t * image_data, uint32_t width, uint32_t x, uint32_t y, uint8_t bpp)
+uint8_t paeth_get_ref(uint8_t * image_data, uint32_t bytes_per_scanline, uint32_t x, uint32_t y, uint8_t bpp)
 {
-    int16_t left   = x >= bpp ? image_data[y * width * bpp + x - bpp] : 0;
-    int16_t up     = y >    0 ? image_data[(y - 1) * width * bpp + x] : 0;
+    int16_t left   = x >= bpp ? image_data[y * bytes_per_scanline + x - bpp] : 0;
+    int16_t up     = y >    0 ? image_data[(y - 1) * bytes_per_scanline + x] : 0;
     int16_t upleft = y >    0 &&
-                     x >= bpp ? image_data[(y - 1) * width * bpp + x - bpp] : 0;
+                     x >= bpp ? image_data[(y - 1) * bytes_per_scanline + x - bpp] : 0;
     
     int16_t lin = left + up - upleft;
     int16_t diff_left   = abs(lin - left);
@@ -79,7 +79,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
         uint8_t most_common_val = 0;
         uint64_t most_common_count = 0;
         
-        for (size_t x = 0; x < width * bpp; x++)
+        for (size_t x = 0; x < bytes_per_scanline; x++)
         {
             uint8_t val = image_data[start + x];
             hit_vals[val] += 1;
@@ -90,7 +90,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
             }
         }
         
-        for (size_t x = 0; x < width * bpp; x++)
+        for (size_t x = 0; x < bytes_per_scanline; x++)
             sum_abs_null += abs((int32_t)(int8_t)(image_data[start + x] - most_common_val));
         
         // bias in favor of storing unfiltered if enough (25%) earlier scanlines are stored unfiltered
@@ -100,17 +100,17 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
         
         for (size_t x = 0; x < bpp; x++)
             sum_abs_left += abs((int32_t)(int8_t)(image_data[start + x]));
-        for (size_t x = bpp; x < width * bpp; x++)
+        for (size_t x = bpp; x < bytes_per_scanline; x++)
             sum_abs_left += abs((int32_t)(image_data[start + x]) - (int32_t)(image_data[start + x - bpp]));
         
         if (y > 0)
         {
             sum_abs_top = 0;
-            for (size_t x = 0; x < width * bpp; x++)
+            for (size_t x = 0; x < bytes_per_scanline; x++)
                 sum_abs_top += abs((int32_t)(image_data[start + x]) - (int32_t)(image_data[start - bytes_per_scanline + x]));
         }
         
-        for (size_t x = 0; x < width * bpp; x++)
+        for (size_t x = 0; x < bytes_per_scanline; x++)
         {
             uint16_t up   = y >    0 ? image_data[start - bytes_per_scanline + x] : 0;
             uint16_t left = x >= bpp ? image_data[start + x - bpp] : 0;
@@ -118,10 +118,10 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
             sum_abs_avg += abs((int32_t)(image_data[start + x]) - (int32_t)(avg));
         }
         
-        for (size_t x = 0; x < width * bpp; x++)
+        for (size_t x = 0; x < bytes_per_scanline; x++)
         {
-            uint8_t ref = paeth_get_ref(image_data, width, x, y, bpp);
-            sum_abs_paeth += abs((int32_t)(image_data[y * width * bpp + x]) - (int32_t)(ref));
+            uint8_t ref = paeth_get_ref(image_data, bytes_per_scanline, x, y, bpp);
+            sum_abs_paeth += abs((int32_t)(image_data[y * bytes_per_scanline + x]) - (int32_t)(ref));
         }
         
         if (sum_abs_null <= sum_abs_left && sum_abs_null <= sum_abs_top && sum_abs_null <= sum_abs_avg && sum_abs_null <= sum_abs_paeth)
@@ -129,7 +129,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
             num_unfiltered += 1;
             puts("picked filter mode 0");
             byte_push(&pixel_data, 0); // no filter
-            bytes_push(&pixel_data, &image_data[start], width * bpp);
+            bytes_push(&pixel_data, &image_data[start], bytes_per_scanline);
         }
         else if (sum_abs_left <= sum_abs_top && sum_abs_left <= sum_abs_avg && sum_abs_left <= sum_abs_paeth)
         {
@@ -137,21 +137,21 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
             byte_push(&pixel_data, 1); // left filter
             for (size_t x = 0; x < bpp; x++)
                 byte_push(&pixel_data, image_data[start + x]);
-            for (size_t x = bpp; x < width * bpp; x++)
+            for (size_t x = bpp; x < bytes_per_scanline; x++)
                 byte_push(&pixel_data, image_data[start + x] - image_data[start + x - bpp]);
         }
         else if (sum_abs_top <= sum_abs_avg && sum_abs_top <= sum_abs_paeth)
         {
             puts("picked filter mode 2");
             byte_push(&pixel_data, 2); // top filter
-            for (size_t x = 0; x < width * bpp; x++)
+            for (size_t x = 0; x < bytes_per_scanline; x++)
                 byte_push(&pixel_data, image_data[start + x] - image_data[start - bytes_per_scanline + x]);
         }
         else if (sum_abs_avg <= sum_abs_paeth)
         {
             puts("picked filter mode 3");
             byte_push(&pixel_data, 3); // avg filter
-            for (size_t x = 0; x < width * bpp; x++)
+            for (size_t x = 0; x < bytes_per_scanline; x++)
             {
                 uint16_t up   = y >    0 ? image_data[start - bytes_per_scanline + x] : 0;
                 uint16_t left = x >= bpp ? image_data[start + x - bpp] : 0;
@@ -163,9 +163,9 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
         {
             puts("picked filter mode 4");
             byte_push(&pixel_data, 4); // paeth filter
-            for (size_t x = 0; x < width * bpp; x++)
+            for (size_t x = 0; x < bytes_per_scanline; x++)
             {
-                uint8_t ref = paeth_get_ref(image_data, width, x, y, bpp);
+                uint8_t ref = paeth_get_ref(image_data, bytes_per_scanline, x, y, bpp);
                 byte_push(&pixel_data, image_data[start + x] - ref);
             }
         }
@@ -192,6 +192,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     puts("saved");
 }
 
+// TODO: support loading indexed PNGs
 void wpng_load_and_save(byte_buffer * buf)
 {
 	if (buf->len < 8)
@@ -209,8 +210,23 @@ void wpng_load_and_save(byte_buffer * buf)
     uint8_t color_type = 0;
     uint8_t interlacing = 0;
     
+    uint8_t palette[1024] = {0};
+    uint8_t palette_size = 0;
+    uint8_t has_idat = 0;
+    uint8_t has_iend = 0;
+    uint8_t has_trns = 0;
+    
+    uint32_t transparent_r = 0xFFFFFFFF;
+    uint32_t transparent_g = 0xFFFFFFFF;
+    uint32_t transparent_b = 0xFFFFFFFF;
+    
+    uint64_t chunk_count = 0;
+    
+    uint8_t prev_was_idat = 0; // multiple idat chunks must be consecutive
     while (buf->cur < buf->len)
     {
+        chunk_count += 1;
+        
         uint32_t size = byteswap_int(bytes_pop_int(buf, 4), 4);
         
         char name[5] = {0};
@@ -220,33 +236,124 @@ void wpng_load_and_save(byte_buffer * buf)
         printf("found chunk: %s\n", name);
         
         size_t cur_start = buf->cur;
-        
         if (memcmp(name, "IHDR", 4) == 0)
         {
+            assert(chunk_count == 1); // must be first
+            assert(width == 0 && height == 0); // must not have multiple
+            
             width = byteswap_int(bytes_pop_int(buf, 4), 4);
             height = byteswap_int(bytes_pop_int(buf, 4), 4);
+            
             bit_depth = byte_pop(buf);
+            assert(bit_depth == 1 || bit_depth == 2 || bit_depth == 4 || bit_depth == 8 || bit_depth == 16);
             color_type = byte_pop(buf);
-            assert(byte_pop(buf) == 0); // 0
-            assert(byte_pop(buf) == 0); // 0
+            assert(color_type <= 6 && color_type != 1 && color_type != 5);
+            
+            assert(byte_pop(buf) == 0); // compression method, must always be 0 for PNGs
+            assert(byte_pop(buf) == 0); // filter method, must always be 0 for PNGs
             interlacing = byte_pop(buf);
+            
+            // FIXME: not supported yet
+            assert(interlacing == 0);
         }
         else if (memcmp(name, "IDAT", 4) == 0)
+        {
+            assert(!has_idat || prev_was_idat); // multiple idat chunks must be consecutive
             bytes_push(&idat, &buf->data[buf->cur], size);
+            has_idat = 1;
+        }
+        else if (memcmp(name, "PLTE", 4) == 0)
+        {
+            assert(!palette_size); // must not have multiple
+            assert(!has_idat); // must precede the first idat chunk
+            assert(!has_trns); // must not come after trns chunk
+            
+            assert(size % 3 == 0); // item count must be an integer
+            assert(size > 0); // minimum allowed item count is 1
+            assert(size <= 768); // maximum allowed item count is 256
+            for (size_t i = 0; i < size / 3; i += 1)
+            {
+                palette[i * 4 + 0] = byte_pop(buf);
+                palette[i * 4 + 1] = byte_pop(buf);
+                palette[i * 4 + 2] = byte_pop(buf);
+                palette[i * 4 + 3] = 0xFF;
+            }
+            palette_size = size / 3;
+        }
+        else if (memcmp(name, "tRNS", 4) == 0)
+        {
+            assert(!has_trns); // must not have multiple
+            assert(!has_idat); // must precede the first idat chunk
+            
+            assert(color_type == 0 || color_type == 2 || color_type == 3);
+            // indexed
+            if (color_type == 3)
+            {
+                assert(size <= palette_size); // must not contain more entries than palette entries (but is allowed to contain less)
+                for (size_t i = 0; i < size; i += 1)
+                    palette[i * 4 + 3] = byte_pop(buf);
+            }
+            // grayscale
+            if (color_type == 0)
+            {
+                assert(size == 2);
+                uint16_t val = byteswap_int(bytes_pop_int(buf, 2), 2);
+                // ... "(If the image bit depth is less than 16, the least significant bits are used and the others are 0.)`
+                // interpreting the above language from the PNG spec as a hard requirement
+                assert(val < (1 << bit_depth));
+                transparent_r = val;
+                transparent_g = val;
+                transparent_b = val;
+            }
+            // rgb
+            if (color_type == 2)
+            {
+                assert(size == 6);
+                uint16_t val_r = byteswap_int(bytes_pop_int(buf, 2), 2);
+                assert(val_r < (1 << bit_depth));
+                uint16_t val_g = byteswap_int(bytes_pop_int(buf, 2), 2);
+                assert(val_g < (1 << bit_depth));
+                uint16_t val_b = byteswap_int(bytes_pop_int(buf, 2), 2);
+                assert(val_b < (1 << bit_depth));
+                transparent_r = val_r;
+                transparent_g = val_g;
+                transparent_b = val_b;
+            }
+            has_trns = 1;
+        }
         else if (memcmp(name, "IEND", 4) == 0)
+        {
+            has_iend = 1;
             break;
+        }
+        
+        prev_was_idat = (memcmp(name, "IDAT", 4) == 0);
+        
+        assert(width != 0 && height != 0); // header must exist and give valid width/height values
         
         buf->cur = cur_start + size + 4;
     }
+    assert(has_idat);
+    assert(has_iend);
+    assert(width != 0 && height != 0); // header must exist and give valid width/height values
     
-    bytes_reserve(&idat, idat.cap + 8);
+    palette[0] = palette[0];
+    transparent_r = transparent_r;
+    transparent_g = transparent_g;
+    transparent_b = transparent_b;
     
-    assert(bit_depth == 8);
-    assert(color_type == 0 || color_type == 2 || color_type == 4 || color_type == 6);
-    assert(interlacing == 0);
+    if (color_type == 4 || color_type == 6)
+        assert(has_trns == 0);
+    if (color_type == 0 || color_type == 4)
+        assert(has_trns == 0);
     
-    uint8_t temp = color_type / 2;
-    uint8_t bpp = (((temp & 1) << 1) + ((temp & 2) >> 1)) + 1;
+    uint8_t temp[] = {1, 0, 3, 1, 2, 0, 4};
+    uint8_t components = temp[color_type];
+    
+    uint8_t bpp = components * bit_depth / 8;
+    bpp = bpp >= 1 ? bpp : 1;
+    
+    size_t bytes_per_scanline = (width * components * bit_depth + 7) / 8;
     
     idat.cur = 0;
     int error = 0;
@@ -254,47 +361,155 @@ void wpng_load_and_save(byte_buffer * buf)
     dec.cur = 0;
     printf("%d\n", error);
     
-    uint8_t * image_data = (uint8_t *)malloc(height * width * bpp);
-    memset(image_data, 0, height * width * bpp);
+    uint8_t * image_data = (uint8_t *)malloc(height * bytes_per_scanline);
+    memset(image_data, 0, height * bytes_per_scanline);
     
     for (size_t y = 0; y < height; y++)
     {
         uint8_t filter_type = byte_pop(&dec);
-        assert(dec.cur + width * bpp <= dec.len);
-        memcpy(&image_data[y * width * bpp], &dec.data[dec.cur], width * bpp);
-        dec.cur += width * bpp;
+        assert(dec.cur + bytes_per_scanline <= dec.len);
+        memcpy(&image_data[y * bytes_per_scanline], &dec.data[dec.cur], bytes_per_scanline);
+        dec.cur += bytes_per_scanline;
         
         if (filter_type == 1)
         {
-            for (size_t x = bpp; x < width * bpp; x++)
-                image_data[y * width * bpp + x] += image_data[y * width * bpp + x - bpp];
+            for (size_t x = bpp; x < bytes_per_scanline; x++)
+                image_data[y * bytes_per_scanline + x] += image_data[y * bytes_per_scanline + x - bpp];
         }
         if (filter_type == 2 && y > 0)
         {
-            for (size_t x = 0; x < width * bpp; x++)
-                image_data[y * width * bpp + x] += image_data[(y - 1) * width * bpp + x];
+            for (size_t x = 0; x < bytes_per_scanline; x++)
+                image_data[y * bytes_per_scanline + x] += image_data[(y - 1) * bytes_per_scanline + x];
         }
         if (filter_type == 3)
         {
-            for (size_t x = 0; x < width * bpp; x++)
+            for (size_t x = 0; x < bytes_per_scanline; x++)
             {
-                uint16_t up   = y >    0 ? image_data[(y - 1) * width * bpp + x] : 0;
-                uint16_t left = x >= bpp ? image_data[y * width * bpp + x - bpp] : 0;
+                uint16_t up   = y >    0 ? image_data[(y - 1) * bytes_per_scanline + x] : 0;
+                uint16_t left = x >= bpp ? image_data[y * bytes_per_scanline + x - bpp] : 0;
                 uint8_t avg = (up + left) / 2;
-                image_data[y * width * bpp + x] += avg;
+                image_data[y * bytes_per_scanline + x] += avg;
             }
         }
         if (filter_type == 4)
         {
-            for (size_t x = 0; x < width * bpp; x++)
+            for (size_t x = 0; x < bytes_per_scanline; x++)
             {
-                uint8_t ref = paeth_get_ref(image_data, width, x, y, bpp);
-                image_data[y * width * bpp + x] += ref;
+                uint8_t ref = paeth_get_ref(image_data, bytes_per_scanline, x, y, bpp);
+                image_data[y * bytes_per_scanline + x] += ref;
             }
         }
     }
     
-    wpng_write("out.png", width, height, bpp, image_data, width * bpp);
+    // convert to 8-bit Y/YA/RGB/RGBA if needed
+    
+    uint8_t out_bpp = components + has_trns;
+    if (palette_size)
+        out_bpp = 3 + has_trns;
+    
+    if (out_bpp != bpp || bit_depth != 8)
+    {
+        uint8_t * out_image_data = (uint8_t *)malloc(height * width * out_bpp);
+        memset(out_image_data, 0, height * width * out_bpp);
+        
+        if (palette_size)
+        {
+            for (size_t y = 0; y < height; y += 1)
+            {
+                for (size_t x = 0; x < width; x += 1)
+                {
+                    size_t n = x / (8 / bit_depth);
+                    size_t o = x % (8 / bit_depth);
+                    uint8_t val = image_data[y * bytes_per_scanline + n];
+                    val >>= 8 - (bit_depth * (o + 1));
+                    val &= (1 << bit_depth) - 1;
+                    
+                    out_image_data[(y * width + x) * out_bpp + 0] = palette[val * 4 + 0];
+                    out_image_data[(y * width + x) * out_bpp + 1] = palette[val * 4 + 1];
+                    out_image_data[(y * width + x) * out_bpp + 2] = palette[val * 4 + 2];
+                    out_image_data[(y * width + x) * out_bpp + 3] = palette[val * 4 + 3];
+                }
+            }
+        }
+        else if (components == 1)
+        {
+            for (size_t y = 0; y < height; y += 1)
+            {
+                for (size_t x = 0; x < width; x += 1)
+                {
+                    if (bit_depth == 16)
+                    {
+                        size_t i = y * bytes_per_scanline;
+                        uint16_t val = ((uint16_t)image_data[i + x * 2] << 8) | image_data[i + x * 2 + 1];
+                        
+                        out_image_data[(y * width + x) * out_bpp] = val >> 8;
+                        if (has_trns)
+                            out_image_data[(y * width + x) * out_bpp + 1] = val == transparent_r ? 0 : 0xFF;
+                    }
+                    else
+                    {
+                        // FIXME handle 16-bit properly
+                        size_t n = x / (8 / bit_depth);
+                        size_t o = x % (8 / bit_depth);
+                        uint8_t val = image_data[y * bytes_per_scanline + n];
+                        val >>= 8 - (bit_depth * (o + 1));
+                        val &= (1 << bit_depth) - 1;
+                        
+                        if (bit_depth == 1)
+                            val *= 0xFF;
+                        else if (bit_depth == 2)
+                            val *= 0x55;
+                        else if (bit_depth == 4)
+                            val *= 0x11;
+                        
+                        out_image_data[(y * width + x) * out_bpp] = val;
+                        if (has_trns)
+                            out_image_data[(y * width + x) * out_bpp + 1] = val == transparent_r ? 0 : 0xFF;
+                    }
+                }
+            }
+        }
+        else if (components == 3)
+        {
+            assert(bit_depth == 16);
+            for (size_t y = 0; y < height; y += 1)
+            {
+                for (size_t x = 0; x < width; x += 1)
+                {
+                    size_t i = y * bytes_per_scanline;
+                    uint16_t val_r = ((uint16_t)image_data[i + x * 6 + 0] << 8) | image_data[i + x * 6 + 1];
+                    uint16_t val_g = ((uint16_t)image_data[i + x * 6 + 2] << 8) | image_data[i + x * 6 + 3];
+                    uint16_t val_b = ((uint16_t)image_data[i + x * 6 + 4] << 8) | image_data[i + x * 6 + 5];
+                    
+                    out_image_data[(y * width + x) * out_bpp + 0] = val_r >> 8;
+                    out_image_data[(y * width + x) * out_bpp + 1] = val_g >> 8;
+                    out_image_data[(y * width + x) * out_bpp + 2] = val_b >> 8;
+                    if (has_trns)
+                        out_image_data[(y * width + x) * out_bpp + 1] =
+                            (val_r == transparent_r && val_g == transparent_g && val_b == transparent_b)
+                            ? 0 : 0xFF;
+                }
+            }
+        }
+        else
+        {
+            for (size_t y = 0; y < height; y += 1)
+            {
+                for (size_t x = 0; x < width * components; x += 1)
+                {
+                    assert(bit_depth == 16);
+                    size_t i = y * bytes_per_scanline;
+                    uint16_t val = ((uint16_t)image_data[i + x * 2] << 8) | image_data[i + x * 2 + 1];
+                    out_image_data[(y * width + x) * out_bpp] = val >> 8;
+                }
+            }
+        }
+        wpng_write("out.png", width, height, out_bpp, out_image_data, width * out_bpp);
+    }
+    else
+    {
+        wpng_write("out.png", width, height, bpp, image_data, bytes_per_scanline);
+    }
 }
 
 int main()
@@ -304,7 +519,11 @@ int main()
     if (1)
     {
         //FILE * f = fopen("unifont-jp.png", "rb");
-        FILE * f = fopen("cc0_photo.png", "rb");
+        //FILE * f = fopen("cc0_photo.png", "rb");
+        //FILE * f = fopen("4_bit.png", "rb");
+        //FILE * f = fopen("16bit.png", "rb");
+        FILE * f = fopen("48bit.png", "rb");
+        //FILE * f = fopen("Grayscale_2bit_palette_sample_image.png", "rb");
         //FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
         
         fseek(f, 0, SEEK_END);
