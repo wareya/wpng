@@ -14,13 +14,8 @@
 
 #include "buffers.h"
 
-uint8_t paeth_get_ref(uint8_t * image_data, uint32_t bytes_per_scanline, uint32_t x, uint32_t y, uint8_t bpp)
+uint8_t paeth_get_ref_raw(int16_t left, int16_t up, int16_t upleft)
 {
-    int16_t left   = x >= bpp ? image_data[y * bytes_per_scanline + x - bpp] : 0;
-    int16_t up     = y >    0 ? image_data[(y - 1) * bytes_per_scanline + x] : 0;
-    int16_t upleft = y >    0 &&
-                     x >= bpp ? image_data[(y - 1) * bytes_per_scanline + x - bpp] : 0;
-    
     int16_t lin = left + up - upleft;
     int16_t diff_left   = abs(lin - left);
     int16_t diff_up     = abs(lin - up);
@@ -35,6 +30,15 @@ uint8_t paeth_get_ref(uint8_t * image_data, uint32_t bytes_per_scanline, uint32_
         ref = upleft;
     
     return ref;
+}
+uint8_t paeth_get_ref(uint8_t * image_data, uint32_t bytes_per_scanline, uint32_t x, uint32_t y, uint8_t bpp)
+{
+    int16_t left   = x >= bpp ? image_data[y * bytes_per_scanline + x - bpp] : 0;
+    int16_t up     = y >    0 ? image_data[(y - 1) * bytes_per_scanline + x] : 0;
+    int16_t upleft = y >    0 &&
+                     x >= bpp ? image_data[(y - 1) * bytes_per_scanline + x - bpp] : 0;
+    
+    return paeth_get_ref_raw(left, up, upleft);
 }
 
 void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t  * image_data, size_t bytes_per_scanline)
@@ -127,13 +131,13 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
         if (sum_abs_null <= sum_abs_left && sum_abs_null <= sum_abs_top && sum_abs_null <= sum_abs_avg && sum_abs_null <= sum_abs_paeth)
         {
             num_unfiltered += 1;
-            puts("picked filter mode 0");
+            //puts("picked filter mode 0");
             byte_push(&pixel_data, 0); // no filter
             bytes_push(&pixel_data, &image_data[start], bytes_per_scanline);
         }
         else if (sum_abs_left <= sum_abs_top && sum_abs_left <= sum_abs_avg && sum_abs_left <= sum_abs_paeth)
         {
-            puts("picked filter mode 1");
+            //puts("picked filter mode 1");
             byte_push(&pixel_data, 1); // left filter
             for (size_t x = 0; x < bpp; x++)
                 byte_push(&pixel_data, image_data[start + x]);
@@ -142,14 +146,14 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
         }
         else if (sum_abs_top <= sum_abs_avg && sum_abs_top <= sum_abs_paeth)
         {
-            puts("picked filter mode 2");
+            //puts("picked filter mode 2");
             byte_push(&pixel_data, 2); // top filter
             for (size_t x = 0; x < bytes_per_scanline; x++)
                 byte_push(&pixel_data, image_data[start + x] - image_data[start - bytes_per_scanline + x]);
         }
         else if (sum_abs_avg <= sum_abs_paeth)
         {
-            puts("picked filter mode 3");
+            //puts("picked filter mode 3");
             byte_push(&pixel_data, 3); // avg filter
             for (size_t x = 0; x < bytes_per_scanline; x++)
             {
@@ -161,7 +165,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
         }
         else
         {
-            puts("picked filter mode 4");
+            //puts("picked filter mode 4");
             byte_push(&pixel_data, 4); // paeth filter
             for (size_t x = 0; x < bytes_per_scanline; x++)
             {
@@ -192,6 +196,115 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     puts("saved");
 }
 
+void defilter(uint8_t * image_data, byte_buffer * dec, uint32_t width, uint32_t height, uint8_t interlace_layer, uint8_t bit_depth, uint8_t components)
+{
+    // interlace_layer:
+    // 0: not interlaced
+    // 1~7: adam7 interlace layers
+    //  1 6 4 6 2 6 4 6
+    //  7 7 7 7 7 7 7 7
+    //  5 6 5 6 5 6 5 6
+    //  7 7 7 7 7 7 7 7
+    //  3 6 4 6 3 6 4 6
+    //  7 7 7 7 7 7 7 7
+    //  5 6 5 6 5 6 5 6
+    //  7 7 7 7 7 7 7 7
+    
+    uint8_t y_inits[] = {0, 0, 0, 4, 0, 2, 0, 1};
+    uint8_t y_gaps[] = {1, 8, 8, 8, 4, 4, 2, 2};
+    uint8_t x_inits[] = {0, 0, 4, 0, 2, 0, 1, 0};
+    uint8_t x_gaps[] = {1, 8, 8, 4, 4, 2, 2, 1};
+    
+    size_t y_init = y_inits[interlace_layer];
+    size_t y_gap = y_gaps[interlace_layer];
+    size_t x_init = x_inits[interlace_layer];
+    size_t x_gap = x_gaps[interlace_layer];
+    
+    // note: bit_depth can only be less than 8 if there is only one component
+    
+    size_t bytes_per_scanline = (((size_t)width - x_init + x_gap - 1) / x_gap * bit_depth + 7) / 8 * components;
+    //printf("%d %d %d %lld\n", width, bit_depth, components, bytes_per_scanline);
+    size_t min_bpp = (bit_depth + 7) / 8;
+    size_t output_bps = min_bpp * components * width;
+    //printf("%lld %d %d %d\n", dec->len, output_bps, output_bps * (height - y_init + y_gap - 1) / y_gap, height);
+    
+    uint8_t * y_prev = (uint8_t *)malloc(bytes_per_scanline);
+    uint8_t * y_prev_next = (uint8_t *)malloc(bytes_per_scanline);
+    memset(y_prev, 0, bytes_per_scanline);
+    memset(y_prev_next, 0, bytes_per_scanline);
+    
+    //printf("%d\n", min_bpp * components);
+    
+    size_t scanline_count = ((size_t)height - y_init + y_gap - 1) / y_gap;
+    //printf("%lld %lld %lld\n", scanline_count, scanline_count * (bytes_per_scanline + 1), dec->len);
+    assert(scanline_count * (bytes_per_scanline + 1) <= dec->len);
+    
+    for (size_t y = y_init; y < height; y += y_gap)
+    {
+        // double buffered y_prev
+        uint8_t * temp = y_prev;
+        y_prev = y_prev_next;
+        y_prev_next = temp;
+        
+        uint8_t filter_type = byte_pop(dec);
+        //printf("%lld %lld\n", dec->cur + bytes_per_scanline, dec->len);
+        assert(dec->cur + bytes_per_scanline <= dec->len);
+        
+        //printf("at y %d ", y);
+        //if (filter_type == 0)
+        //    puts("filter mode 0");
+        //if (filter_type == 1)
+        //    puts("filter mode 1");
+        //if (filter_type == 2)
+        //    puts("filter mode 2");
+        //if (filter_type == 3)
+        //    puts("filter mode 3");
+        //if (filter_type == 4)
+        //    puts("filter mode 4");
+        
+        for (size_t x = 0; x < bytes_per_scanline; x += 1)
+        {
+            size_t cur = dec->cur;
+            uint8_t byte = byte_pop(dec);
+            int16_t left = x >= min_bpp * components ? y_prev_next[x - min_bpp * components] : 0;
+            int16_t up   = y_prev[x];
+            int16_t upleft = x >= min_bpp * components ? y_prev[x - min_bpp * components] : 0;
+            
+            if (filter_type == 1)
+                byte += left;
+            if (filter_type == 2)
+                byte += up;
+            if (filter_type == 3)
+                byte += (up + left) / 2;
+            if (filter_type == 4)
+                byte += paeth_get_ref_raw(left, up, upleft);
+            
+            // note: bits_per_pixel can only be less than 8 if there is only one component
+            if (bit_depth < 8)
+            {
+                for (size_t i = 0; i < 8 / bit_depth; i++)
+                {
+                    uint8_t val = byte >> (8 - (bit_depth * (i + 1)));
+                    val &= (1 << bit_depth) - 1;
+                    image_data[y * output_bps + (x * 8 / bit_depth + i) * x_gap + x_init] = val;
+                }
+            }
+            else
+            {
+                size_t true_x = x / (min_bpp * components) * min_bpp * components;
+                size_t leftover_x = x - true_x;
+                size_t x_out = true_x * x_gap + leftover_x + x_init * min_bpp * components;
+                image_data[y * output_bps + x_out] = byte;
+            }
+            
+            y_prev_next[x] = byte;
+        }
+    }
+    
+    free(y_prev);
+    free(y_prev_next);
+}
+
 // TODO: support loading indexed PNGs
 void wpng_load_and_save(byte_buffer * buf)
 {
@@ -211,7 +324,7 @@ void wpng_load_and_save(byte_buffer * buf)
     uint8_t interlacing = 0;
     
     uint8_t palette[1024] = {0};
-    uint8_t palette_size = 0;
+    uint16_t palette_size = 0;
     uint8_t has_idat = 0;
     uint8_t has_iend = 0;
     uint8_t has_trns = 0;
@@ -254,7 +367,7 @@ void wpng_load_and_save(byte_buffer * buf)
             interlacing = byte_pop(buf);
             
             // FIXME: not supported yet
-            assert(interlacing == 0);
+            //assert(interlacing == 0);
         }
         else if (memcmp(name, "IDAT", 4) == 0)
         {
@@ -350,80 +463,54 @@ void wpng_load_and_save(byte_buffer * buf)
     uint8_t temp[] = {1, 0, 3, 1, 2, 0, 4};
     uint8_t components = temp[color_type];
     
-    uint8_t bpp = components * bit_depth / 8;
-    bpp = bpp >= 1 ? bpp : 1;
-    
-    size_t bytes_per_scanline = (width * components * bit_depth + 7) / 8;
+    uint8_t bpp = components * ((bit_depth + 7) / 8);
+    size_t bytes_per_scanline = width * bpp;
     
     idat.cur = 0;
     int error = 0;
     byte_buffer dec = do_inflate(&idat, &error, 1); // decompresses into `dec` (declared earlier)
     dec.cur = 0;
     printf("%d\n", error);
+    if (error != 0)
+    {
+        for (size_t i = 0; i < dec.len; i += 1)
+            printf("%02X ", dec.data[i]);
+        puts("");
+    }
+    assert(error == 0);
     
     uint8_t * image_data = (uint8_t *)malloc(height * bytes_per_scanline);
     memset(image_data, 0, height * bytes_per_scanline);
     
-    for (size_t y = 0; y < height; y++)
+    if (!interlacing)
+        defilter(image_data, &dec, width, height, 0, bit_depth, components);
+    else
     {
-        uint8_t filter_type = byte_pop(&dec);
-        assert(dec.cur + bytes_per_scanline <= dec.len);
-        memcpy(&image_data[y * bytes_per_scanline], &dec.data[dec.cur], bytes_per_scanline);
-        dec.cur += bytes_per_scanline;
-        
-        if (filter_type == 1)
-        {
-            for (size_t x = bpp; x < bytes_per_scanline; x++)
-                image_data[y * bytes_per_scanline + x] += image_data[y * bytes_per_scanline + x - bpp];
-        }
-        if (filter_type == 2 && y > 0)
-        {
-            for (size_t x = 0; x < bytes_per_scanline; x++)
-                image_data[y * bytes_per_scanline + x] += image_data[(y - 1) * bytes_per_scanline + x];
-        }
-        if (filter_type == 3)
-        {
-            for (size_t x = 0; x < bytes_per_scanline; x++)
-            {
-                uint16_t up   = y >    0 ? image_data[(y - 1) * bytes_per_scanline + x] : 0;
-                uint16_t left = x >= bpp ? image_data[y * bytes_per_scanline + x - bpp] : 0;
-                uint8_t avg = (up + left) / 2;
-                image_data[y * bytes_per_scanline + x] += avg;
-            }
-        }
-        if (filter_type == 4)
-        {
-            for (size_t x = 0; x < bytes_per_scanline; x++)
-            {
-                uint8_t ref = paeth_get_ref(image_data, bytes_per_scanline, x, y, bpp);
-                image_data[y * bytes_per_scanline + x] += ref;
-            }
-        }
+        for (uint8_t i = 1; i <= 7; i += 1)
+            defilter(image_data, &dec, width, height, i, bit_depth, components);
     }
     
-    // convert to 8-bit Y/YA/RGB/RGBA if needed
+    // convert to Y/YA/RGB/RGBA if needed
     
     uint8_t out_bpp = components + has_trns;
     if (palette_size)
         out_bpp = 3 + has_trns;
     
-    if (out_bpp != bpp || bit_depth != 8)
+    if (out_bpp != bpp || bit_depth != 8 || palette_size)
     {
         uint8_t * out_image_data = (uint8_t *)malloc(height * width * out_bpp);
         memset(out_image_data, 0, height * width * out_bpp);
         
+        puts("converting...");
+        
         if (palette_size)
         {
+            puts("depalettizing...");
             for (size_t y = 0; y < height; y += 1)
             {
                 for (size_t x = 0; x < width; x += 1)
                 {
-                    size_t n = x / (8 / bit_depth);
-                    size_t o = x % (8 / bit_depth);
-                    uint8_t val = image_data[y * bytes_per_scanline + n];
-                    val >>= 8 - (bit_depth * (o + 1));
-                    val &= (1 << bit_depth) - 1;
-                    
+                    uint8_t val = image_data[y * bytes_per_scanline + x];
                     out_image_data[(y * width + x) * out_bpp + 0] = palette[val * 4 + 0];
                     out_image_data[(y * width + x) * out_bpp + 1] = palette[val * 4 + 1];
                     out_image_data[(y * width + x) * out_bpp + 2] = palette[val * 4 + 2];
@@ -433,6 +520,7 @@ void wpng_load_and_save(byte_buffer * buf)
         }
         else if (components == 1)
         {
+            assert(has_trns == (out_bpp == 2));
             for (size_t y = 0; y < height; y += 1)
             {
                 for (size_t x = 0; x < width; x += 1)
@@ -448,12 +536,7 @@ void wpng_load_and_save(byte_buffer * buf)
                     }
                     else
                     {
-                        // FIXME handle 16-bit properly
-                        size_t n = x / (8 / bit_depth);
-                        size_t o = x % (8 / bit_depth);
-                        uint8_t val = image_data[y * bytes_per_scanline + n];
-                        val >>= 8 - (bit_depth * (o + 1));
-                        val &= (1 << bit_depth) - 1;
+                        uint8_t val = image_data[y * bytes_per_scanline + x];
                         
                         if (bit_depth == 1)
                             val *= 0xFF;
@@ -472,6 +555,7 @@ void wpng_load_and_save(byte_buffer * buf)
         else if (components == 3)
         {
             assert(bit_depth == 16);
+            assert(has_trns == (out_bpp == 4));
             for (size_t y = 0; y < height; y += 1)
             {
                 for (size_t x = 0; x < width; x += 1)
@@ -481,6 +565,8 @@ void wpng_load_and_save(byte_buffer * buf)
                     uint16_t val_g = ((uint16_t)image_data[i + x * 6 + 2] << 8) | image_data[i + x * 6 + 3];
                     uint16_t val_b = ((uint16_t)image_data[i + x * 6 + 4] << 8) | image_data[i + x * 6 + 5];
                     
+                    printf("%d ", val_r);
+                    
                     out_image_data[(y * width + x) * out_bpp + 0] = val_r >> 8;
                     out_image_data[(y * width + x) * out_bpp + 1] = val_g >> 8;
                     out_image_data[(y * width + x) * out_bpp + 2] = val_b >> 8;
@@ -489,15 +575,16 @@ void wpng_load_and_save(byte_buffer * buf)
                             (val_r == transparent_r && val_g == transparent_g && val_b == transparent_b)
                             ? 0 : 0xFF;
                 }
+                printf("%d\n", (y * width * out_bpp));
             }
         }
-        else
+        else // components == 2 or 4
         {
+            assert(bit_depth == 16);
             for (size_t y = 0; y < height; y += 1)
             {
                 for (size_t x = 0; x < width * components; x += 1)
                 {
-                    assert(bit_depth == 16);
                     size_t i = y * bytes_per_scanline;
                     uint16_t val = ((uint16_t)image_data[i + x * 2] << 8) | image_data[i + x * 2 + 1];
                     out_image_data[(y * width + x) * out_bpp] = val >> 8;
@@ -512,9 +599,15 @@ void wpng_load_and_save(byte_buffer * buf)
     }
 }
 
-int main()
+int main(int argc, char ** argv)
 {
     defl_compute_crc32(0, 0, 0);
+    
+    if (argc < 2)
+    {
+        puts("error: need input file argument");
+        return;
+    }
     
     if (1)
     {
@@ -522,7 +615,23 @@ int main()
         //FILE * f = fopen("cc0_photo.png", "rb");
         //FILE * f = fopen("4_bit.png", "rb");
         //FILE * f = fopen("16bit.png", "rb");
-        FILE * f = fopen("48bit.png", "rb");
+        //FILE * f = fopen("48bit.png", "rb");
+        //FILE * f = fopen("tests/basn0g01.png", "rb");
+        //FILE * f = fopen("tests/basn3p02.png", "rb");
+        //FILE * f = fopen("tests/basn2c08.png", "rb");
+        //FILE * f = fopen("tests/basn3p08.png", "rb");
+        //FILE * f = fopen("tests/basn2c16.png", "rb");
+        //FILE * f = fopen("tests/basi0g01.png", "rb");
+        //FILE * f = fopen("tests/basi3p02.png", "rb");
+        //FILE * f = fopen("tests/basi2c08.png", "rb");
+        //FILE * f = fopen("tests/basi3p08.png", "rb");
+        //FILE * f = fopen("tests/basi2c16.png", "rb");
+        FILE * f = fopen(argv[1], "rb");
+        if (!f)
+        {
+            puts("error: invalid filename");
+            return;
+        }
         //FILE * f = fopen("Grayscale_2bit_palette_sample_image.png", "rb");
         //FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
         
