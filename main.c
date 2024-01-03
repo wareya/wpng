@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <math.h>
 
 #include "inflate.h"
 #include "deflate.h"
@@ -41,7 +42,38 @@ uint8_t paeth_get_ref(uint8_t * image_data, uint32_t bytes_per_scanline, uint32_
     return paeth_get_ref_raw(left, up, upleft);
 }
 
-void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t  * image_data, size_t bytes_per_scanline)
+void apply_gamma(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t * image_data, size_t bytes_per_scanline, float gamma)
+{
+    uint8_t components = bpp;
+    if (is_16bit)
+        components /= 2;
+    
+    for (size_t y = 0; y < height; y += 1)
+    {
+        for (size_t x = 0; x < width * components; x += 1)
+        {
+            if ((components == 2 || components == 4) && (x % components == (uint8_t)(components - 1)))
+                continue;
+            if (is_16bit)
+            {
+                uint16_t a = image_data[y * bytes_per_scanline + x * 2 + 0];
+                uint16_t b = image_data[y * bytes_per_scanline + x * 2 + 1];
+                uint16_t val = (a << 8) | b;
+                val = pow(val / 65535.0, gamma) * 65535.0;
+                image_data[y * bytes_per_scanline + x * 2 + 0] = val >> 8;
+                image_data[y * bytes_per_scanline + x * 2 + 1] = val;
+            }
+            else
+            {
+                
+                uint8_t a = image_data[y * bytes_per_scanline + x];
+                a = pow(a / 255.0, gamma) * 255.0;
+                image_data[y * bytes_per_scanline + x] = a;
+            }
+        }
+    }
+}
+void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t * image_data, size_t bytes_per_scanline)
 {
     byte_buffer out;
     memset(&out, 0, sizeof(byte_buffer));
@@ -265,7 +297,6 @@ void defilter(uint8_t * image_data, byte_buffer * dec, uint32_t width, uint32_t 
         
         for (size_t x = 0; x < bytes_per_scanline; x += 1)
         {
-            size_t cur = dec->cur;
             uint8_t byte = byte_pop(dec);
             int16_t left = x >= min_bpp * components ? y_prev_next[x - min_bpp * components] : 0;
             int16_t up   = y_prev[x];
@@ -306,7 +337,6 @@ void defilter(uint8_t * image_data, byte_buffer * dec, uint32_t width, uint32_t 
     free(y_prev_next);
 }
 
-// TODO: support loading indexed PNGs
 void wpng_load_and_save(byte_buffer * buf)
 {
 	if (buf->len < 8)
@@ -335,6 +365,9 @@ void wpng_load_and_save(byte_buffer * buf)
     uint32_t transparent_b = 0xFFFFFFFF;
     
     uint64_t chunk_count = 0;
+    
+    uint8_t is_srgb = 0;
+    float gamma = -1.0;
     
     uint8_t prev_was_idat = 0; // multiple idat chunks must be consecutive
     while (buf->cur < buf->len)
@@ -369,6 +402,23 @@ void wpng_load_and_save(byte_buffer * buf)
             
             // FIXME: not supported yet
             //assert(interlacing == 0);
+        }
+        else if (memcmp(name, "sRGB", 4) == 0)
+        {
+            assert(palette_size == 0); // can't come after palette
+            assert(!has_idat); // can't come after idat
+            is_srgb = 1;
+        }
+        else if (memcmp(name, "gAMA", 4) == 0)
+        {
+            assert(palette_size == 0); // can't come after palette
+            assert(!has_idat); // can't come after idat
+            gamma = 1.0 / (byteswap_int(bytes_pop_int(buf, 4), 4) / 100000.0 * 2.2);
+        }
+        else if (memcmp(name, "cHRM", 4) == 0)
+        {
+            assert(palette_size == 0); // can't come after palette
+            assert(!has_idat); // can't come after idat
         }
         else if (memcmp(name, "IDAT", 4) == 0)
         {
@@ -445,6 +495,7 @@ void wpng_load_and_save(byte_buffer * buf)
         
         assert(width != 0 && height != 0); // header must exist and give valid width/height values
         
+        // TODO check checksum?
         buf->cur = cur_start + size + 4;
     }
     assert(has_idat);
@@ -616,22 +667,26 @@ void wpng_load_and_save(byte_buffer * buf)
                     if (bit_depth == 16)
                     {
                         uint16_t val = ((uint16_t)image_data[i + x * 2] << 8) | image_data[i + x * 2 + 1];
-                        out_image_data[(y * width + x) * out_bpp + 9] = val >> 8;
+                        out_image_data[(y * width + x) * out_bpp + 0] = val >> 8;
                         out_image_data[(y * width + x) * out_bpp + 1] = val & 0xFF;
                     }
                     else
                     {
                         uint16_t val = ((uint16_t)image_data[i + x * 2] << 8) | image_data[i + x * 2 + 1];
-                        out_image_data[(y * width + x) * out_bpp + 9] = val >> 8;
+                        out_image_data[(y * width + x) * out_bpp + 0] = val >> 8;
                         out_image_data[(y * width + x) * out_bpp + 1] = val & 0xFF;
                     }
                 }
             }
         }
+        if (gamma >= 0.0 && !is_srgb)
+            apply_gamma(width, height, out_bpp, bit_depth == 16, out_image_data, width * out_bpp, gamma);
         wpng_write("out.png", width, height, out_bpp, bit_depth == 16, out_image_data, width * out_bpp);
     }
     else
     {
+        if (gamma >= 0.0 && !is_srgb)
+            apply_gamma(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, gamma);
         wpng_write("out.png", width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline);
     }
 }
@@ -643,7 +698,7 @@ int main(int argc, char ** argv)
     if (argc < 2)
     {
         puts("error: need input file argument");
-        return;
+        return 0;
     }
     
     if (1)
@@ -668,7 +723,7 @@ int main(int argc, char ** argv)
         if (!f)
         {
             puts("error: invalid filename");
-            return;
+            return 0;
         }
         //FILE * f = fopen("Grayscale_2bit_palette_sample_image.png", "rb");
         //FILE * f = fopen("0-ufeff_tiles_v2.png", "rb");
