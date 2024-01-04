@@ -84,7 +84,7 @@ void apply_gamma(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit,
             {
                 
                 uint8_t val = image_data[y * bytes_per_scanline + x];
-                val = apply_gamma_u16(val, gamma);
+                val = apply_gamma_u8(val, gamma);
                 image_data[y * bytes_per_scanline + x] = val;
             }
         }
@@ -549,13 +549,11 @@ enum {
 
 void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
 {
-    // TODO:
-    // - check CRCs
-    // - check chunk name flags
-	if (buf->len < 8)
+	if (buf->len < 8 || memcmp(buf->data, "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", 8) != 0)
+    {
+        puts("not a PNG file");
 		return;
-	if (memcmp(buf->data, "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", 8) != 0)
-		return;
+    }
     buf->cur = 8;
     
     byte_buffer idat;
@@ -597,15 +595,23 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         chunk_count += 1;
         
         uint32_t size = byteswap_int(bytes_pop_int(buf, 4), 4);
+        assert(size < 0x80000000);
+        assert(buf->cur + size + 8 <= buf->len);
         
         size_t chunk_start = buf->cur;
         char name[5] = {0};
         for (size_t i = 0; i < 4; i += 1)
+        {
             name[i] = byte_pop(buf);
+            uint8_t upcased = name[i] | 0x20;
+            assert(upcased >= 97 && upcased <= 122);
+        }
         
         printf("found chunk: %s\n", name);
         
         size_t cur_start = buf->cur;
+        
+        uint8_t recognized = 1;
         if (memcmp(name, "IHDR", 4) == 0)
         {
             assert(chunk_count == 1); // must be first
@@ -769,9 +775,10 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         }
         else
         {
+            recognized = 0;
             if (!(flags & WPNG_READ_SKIP_CRITICAL_CHUNKS))
             {
-                assert((name[0] & 0x10) == 0); // unknown chunks must not be critical
+                assert((name[0] & 0x20) == 0); // unknown chunks must not be critical
             }
         }
         
@@ -779,7 +786,8 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         
         assert(width != 0 && height != 0); // header must exist and give valid width/height values
         
-        if (!(flags & WPNG_READ_SKIP_CHECKSUMS))
+        // skip CRC for unrecognized chunks
+        if (recognized && !(flags & WPNG_READ_SKIP_CHECKSUMS))
         {
             buf->cur = cur_start + size;
             uint32_t expected_checksum = byteswap_int(bytes_pop_int(buf, 4), 4);
