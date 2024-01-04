@@ -158,10 +158,6 @@ uint8_t * palettize(uint32_t width, uint32_t height, uint8_t bpp, uint8_t * imag
     else
         return 0;
     
-    printf("bpp: %d\n", bpp);
-    for (size_t i = 0; i < palette_i; i += 1)
-        printf("%08X\n", palette[i]);
-    
     uint8_t depth = 0;
     if (palette_i <= 2)
         depth = 1;
@@ -175,8 +171,6 @@ uint8_t * palettize(uint32_t width, uint32_t height, uint8_t bpp, uint8_t * imag
         return 0;
     
     assert(palette_i <= 256);
-    
-    printf("depth: %d\n", depth);
     
     size_t out_bps = (width * depth + 7) / 8;
     
@@ -408,7 +402,6 @@ byte_buffer wpng_write(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_
         }
     }
     
-    printf("raw pixel data byte count: %zu\n", pixel_data.len);
     bit_buffer pixel_data_comp = do_deflate(pixel_data.data, pixel_data.len, compression_quality, 1);
     
     bytes_push_int(&out, byteswap_int(pixel_data_comp.buffer.len, 4), 4);
@@ -535,14 +528,53 @@ void defilter(uint8_t * image_data, byte_buffer * dec, uint32_t width, uint32_t 
 }
 
 enum {
-    WPNG_READ_SKIP_CHECKSUMS = 1,
-    WPNG_READ_SKIP_CRITICAL_CHUNKS = 2,
-    WPNG_READ_SKIP_GAMMA_CORRECTION = 4,
-    WPNG_READ_ERROR_ON_BAD_ANCILLARY_CRC = 8,
+    WPNG_READ_SKIP_CRC = 1, // don't check chunk CRCs 
+    WPNG_READ_SKIP_CRITICAL_CHUNKS = 2, // skip unknown critical chunks
+    WPNG_READ_SKIP_GAMMA_CORRECTION = 4, // don't apply gamma correction
+    WPNG_READ_SKIP_IDAT_CRC = 8, // like chrome
+    WPNG_READ_ERROR_ON_BAD_ANCILLARY_CRC = 16, // treat chunks with bad CRCs like unknown chunks
 };
 
-void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
+// output:
+// u8 array
+// size of array
+// width
+// height
+// bytes per pixel
+// is 16 bit or not
+// scanline byte count
+// gamma (-1 if unset or srgb)
+typedef struct {
+    uint8_t * data;
+    size_t size;
+    size_t bytes_per_scanline;
+    uint32_t width;
+    uint32_t height;
+    float gamma;
+    uint8_t bytes_per_pixel;
+    uint8_t is_16bit;
+    uint8_t error;
+} wpng_load_output;
+
+// on error, writes nonzero to the "error" value of output and leaves the rest untouched
+// on success, writes zero to the "error" value of output and writes every other value
+void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
 {
+    assert(output);
+    
+    #define WPNG_ASSERT(COND, ERRVAL) { if (!(COND)) { output->error = (ERRVAL); return; } }
+    // 1 - chunk size error
+    // 2 - buffer overflow
+    // 3 - invalid chunk name
+    // 4 - failed crc
+    // 5 - chunk syntax error or invalid value within chunk
+    // 6 - chunk ordering error
+    // 7 - unknown critical chunk
+    // 8 - missing mandatory chunk (IHDR/IDAT/IEND)
+    // 9 - has chunk that's forbidden for given color format
+    // 10 - missing contextual mandatory chunk (PLTE on indexed images)
+    // 11 - invalid zlib data
+    
 	if (buf->len < 8 || memcmp(buf->data, "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", 8) != 0)
     {
         puts("not a PNG file");
@@ -589,8 +621,8 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         chunk_count += 1;
         
         uint32_t size = byteswap_int(bytes_pop_int(buf, 4), 4);
-        assert(size < 0x80000000); // must be 31 bit
-        assert(buf->cur + size + 8 <= buf->len); // must not overflow buffer
+        WPNG_ASSERT(size < 0x80000000, 1); // must be 31 bit
+        WPNG_ASSERT(buf->cur + size + 8 <= buf->len, 2); // must not overflow buffer
         
         size_t chunk_start = buf->cur;
         char name[5] = {0};
@@ -598,16 +630,14 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         {
             name[i] = byte_pop(buf);
             uint8_t upcased = name[i] | 0x20;
-            assert(upcased >= 97 && upcased <= 122);
+            WPNG_ASSERT(upcased >= 97 && upcased <= 122, 3);
         }
-        uint8_t critical = !!(name[0] & 0x20);
-        
-        printf("found chunk: %s\n", name);
+        uint8_t critical = !(name[0] & 0x20);
         
         size_t cur_start = buf->cur;
         
         uint8_t checksum_failed = 0;
-        if (!(flags & WPNG_READ_SKIP_CHECKSUMS))
+        if (!(flags & WPNG_READ_SKIP_CRC) && !((flags & WPNG_READ_SKIP_IDAT_CRC) && memcmp(name, "IDAT", 4) == 0))
         {
             buf->cur = cur_start + size;
             uint32_t expected_checksum = byteswap_int(bytes_pop_int(buf, 4), 4);
@@ -617,12 +647,12 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         
         // always check CRC for critical chunks
         if (critical)
-            assert(!checksum_failed);
+            WPNG_ASSERT(!checksum_failed, 4);
         // skip ancillary chunks with bad checksums, unless the option is set to error instead
         if (checksum_failed)
         {
             if (flags & WPNG_READ_ERROR_ON_BAD_ANCILLARY_CRC)
-                assert(!checksum_failed);
+                WPNG_ASSERT(!checksum_failed, 4)
             else
             {
                 buf->cur = cur_start + size + 4;
@@ -634,108 +664,109 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         
         if (memcmp(name, "IHDR", 4) == 0)
         {
-            assert(size == 13);
-            assert(chunk_count == 1); // must be first
-            assert(width == 0 && height == 0); // must not have multiple
+            WPNG_ASSERT(size == 13, 5);
+            WPNG_ASSERT(chunk_count == 1, 6); // must be first
+            WPNG_ASSERT(width == 0 && height == 0, 6); // must not have multiple
             
             width = byteswap_int(bytes_pop_int(buf, 4), 4);
             height = byteswap_int(bytes_pop_int(buf, 4), 4);
+            WPNG_ASSERT(width != 0 && height != 0, 5); // must be coherent
             
             bit_depth = byte_pop(buf);
-            assert(bit_depth == 1 || bit_depth == 2 || bit_depth == 4 || bit_depth == 8 || bit_depth == 16);
+            WPNG_ASSERT(bit_depth == 1 || bit_depth == 2 || bit_depth == 4 || bit_depth == 8 || bit_depth == 16, 5);
             color_type = byte_pop(buf);
-            assert(color_type <= 6 && color_type != 1 && color_type != 5);
+            WPNG_ASSERT(color_type <= 6 && color_type != 1 && color_type != 5, 5);
             
-            assert(byte_pop(buf) == 0); // compression method, must always be 0 for PNGs
-            assert(byte_pop(buf) == 0); // filter method, must always be 0 for PNGs
+            WPNG_ASSERT(byte_pop(buf) == 0, 5); // compression method, must always be 0 for PNGs
+            WPNG_ASSERT(byte_pop(buf) == 0, 5); // filter method, must always be 0 for PNGs
             interlacing = byte_pop(buf);
         }
         else if (memcmp(name, "sRGB", 4) == 0)
         {
-            assert(palette_size == 0); // can't come after palette
-            assert(!has_idat); // can't come after idat
-            assert(!is_srgb); // can't have multiple
+            WPNG_ASSERT(palette_size == 0, 6); // can't come after palette
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
+            WPNG_ASSERT(!is_srgb, 6); // can't have multiple
             is_srgb = 1;
         }
         else if (memcmp(name, "gAMA", 4) == 0)
         {
-            assert(palette_size == 0); // can't come after palette
-            assert(!has_idat); // can't come after idat
-            assert(!has_gama); // can't have multiple
+            WPNG_ASSERT(palette_size == 0, 6); // can't come after palette
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
+            WPNG_ASSERT(!has_gama, 6); // can't have multiple
             has_gama = 1;
             gamma = 100000.0 / byteswap_int(bytes_pop_int(buf, 4), 4);
         }
         else if (memcmp(name, "iCCP", 4) == 0)
         {
-            assert(palette_size == 0); // can't come after palette
-            assert(!has_idat); // can't come after idat
-            assert(!has_iccp); // can't have multiple
+            WPNG_ASSERT(palette_size == 0, 6); // can't come after palette
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
+            WPNG_ASSERT(!has_iccp, 6); // can't have multiple
             has_iccp = 1;
         }
         else if (memcmp(name, "cHRM", 4) == 0)
         {
-            assert(palette_size == 0); // can't come after palette
-            assert(!has_idat); // can't come after idat
-            assert(!has_chrm); // can't have multiple
+            WPNG_ASSERT(palette_size == 0, 6); // can't come after palette
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
+            WPNG_ASSERT(!has_chrm, 6); // can't have multiple
             has_chrm = 1;
         }
         else if (memcmp(name, "sBIT", 4) == 0)
         {
-            assert(palette_size == 0); // can't come after palette
-            assert(!has_idat); // can't come after idat
-            assert(!has_sbit); // can't have multiple
+            WPNG_ASSERT(palette_size == 0, 6); // can't come after palette
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
+            WPNG_ASSERT(!has_sbit, 6); // can't have multiple
             has_sbit = 1;
         }
         else if (memcmp(name, "bKGD", 4) == 0)
         {
-            assert(!has_idat); // can't come after idat
-            assert(!has_bkgd); // can't have multiple
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
+            WPNG_ASSERT(!has_bkgd, 6); // can't have multiple
             has_bkgd = 1;
         }
         else if (memcmp(name, "hIST", 4) == 0)
         {
-            assert(!has_idat); // can't come after idat
-            assert(!has_hist); // can't have multiple
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
+            WPNG_ASSERT(!has_hist, 6); // can't have multiple
             has_hist = 1;
         }
         else if (memcmp(name, "pHYS", 4) == 0)
         {
-            assert(!has_idat); // can't come after idat
-            assert(!has_phys); // can't have multiple
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
+            WPNG_ASSERT(!has_phys, 6); // can't have multiple
             has_phys = 1;
         }
         else if (memcmp(name, "tIME", 4) == 0)
         {
-            assert(!has_time); // can't have multiple
+            WPNG_ASSERT(!has_time, 6); // can't have multiple
             has_time = 1;
         }
         else if (memcmp(name, "sBIT", 4) == 0)
         {
-            assert(palette_size == 0); // can't come after palette
-            assert(!has_idat); // can't come after idat
+            WPNG_ASSERT(palette_size == 0, 6); // can't come after palette
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
         }
         else if (memcmp(name, "gAMA", 4) == 0)
         {
-            assert(palette_size == 0); // can't come after palette
-            assert(!has_idat); // can't come after idat
+            WPNG_ASSERT(palette_size == 0, 6); // can't come after palette
+            WPNG_ASSERT(!has_idat, 6); // can't come after idat
         }
         else if (memcmp(name, "IDAT", 4) == 0)
         {
-            assert(!has_idat || prev_was_idat); // multiple idat chunks must be consecutive
+            WPNG_ASSERT(!has_idat || prev_was_idat, 6); // multiple idat chunks must be consecutive
             bytes_push(&idat, &buf->data[buf->cur], size);
             has_idat = 1;
         }
         else if (memcmp(name, "PLTE", 4) == 0)
         {
-            assert(!palette_size); // must not have multiple
-            assert(!has_idat); // must precede idat chunks
-            assert(!has_trns); // must not come after trns chunk
-            assert(!has_bkgd); // must not come after bkgd chunk
-            assert(!has_hist); // must not come after hist chunk
+            WPNG_ASSERT(!palette_size, 6); // must not have multiple
+            WPNG_ASSERT(!has_idat, 6); // must precede idat chunks
+            WPNG_ASSERT(!has_trns, 6); // must not come after trns chunk
+            WPNG_ASSERT(!has_bkgd, 6); // must not come after bkgd chunk
+            WPNG_ASSERT(!has_hist, 6); // must not come after hist chunk
             
-            assert(size % 3 == 0); // item count must be an integer
-            assert(size > 0); // minimum allowed item count is 1
-            assert(size <= 768); // maximum allowed item count is 256
+            WPNG_ASSERT(size % 3 == 0, 5); // item count must be an integer
+            WPNG_ASSERT(size > 0, 5); // minimum allowed item count is 1
+            WPNG_ASSERT(size <= 768, 5); // maximum allowed item count is 256
             for (size_t i = 0; i < size / 3; i += 1)
             {
                 palette[i * 4 + 0] = byte_pop(buf);
@@ -747,25 +778,25 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         }
         else if (memcmp(name, "tRNS", 4) == 0)
         {
-            assert(!has_trns); // must not have multiple
-            assert(!has_idat); // must precede the first idat chunk
+            WPNG_ASSERT(!has_trns, 6); // must not have multiple
+            WPNG_ASSERT(!has_idat, 6); // must precede the first idat chunk
             
-            assert(color_type == 0 || color_type == 2 || color_type == 3);
+            WPNG_ASSERT(color_type == 0 || color_type == 2 || color_type == 3, 5);
             // indexed
             if (color_type == 3)
             {
-                assert(size <= palette_size); // must not contain more entries than palette entries (but is allowed to contain less)
+                WPNG_ASSERT(size <= palette_size, 5); // must not contain more entries than palette entries (but is allowed to contain less)
                 for (size_t i = 0; i < size; i += 1)
                     palette[i * 4 + 3] = byte_pop(buf);
             }
             // grayscale
             if (color_type == 0)
             {
-                assert(size == 2);
+                WPNG_ASSERT(size == 2, 5);
                 uint16_t val = byteswap_int(bytes_pop_int(buf, 2), 2);
                 // ... "(If the image bit depth is less than 16, the least significant bits are used and the others are 0.)`
                 // interpreting the above language from the PNG spec as a hard requirement
-                assert(val < (1 << bit_depth));
+                WPNG_ASSERT(val < (1 << bit_depth), 5);
                 transparent_r = val;
                 transparent_g = val;
                 transparent_b = val;
@@ -773,13 +804,13 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
             // rgb
             if (color_type == 2)
             {
-                assert(size == 6);
+                WPNG_ASSERT(size == 6, 5);
                 uint16_t val_r = byteswap_int(bytes_pop_int(buf, 2), 2);
-                assert(val_r < (1 << bit_depth));
+                WPNG_ASSERT(val_r < (1 << bit_depth), 5);
                 uint16_t val_g = byteswap_int(bytes_pop_int(buf, 2), 2);
-                assert(val_g < (1 << bit_depth));
+                WPNG_ASSERT(val_g < (1 << bit_depth), 5);
                 uint16_t val_b = byteswap_int(bytes_pop_int(buf, 2), 2);
-                assert(val_b < (1 << bit_depth));
+                WPNG_ASSERT(val_b < (1 << bit_depth), 5);
                 transparent_r = val_r;
                 transparent_g = val_g;
                 transparent_b = val_b;
@@ -794,23 +825,25 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         else
         {
             if (!(flags & WPNG_READ_SKIP_CRITICAL_CHUNKS))
-                assert(!critical); // unknown chunks must not be critical
+                WPNG_ASSERT(!critical, 7); // unknown chunks must not be critical
         }
         
         prev_was_idat = (memcmp(name, "IDAT", 4) == 0);
         
-        assert(width != 0 && height != 0); // header must exist and give valid width/height values
+        WPNG_ASSERT(width != 0 && height != 0, 8); // header must exist and give valid width/height values
         
         buf->cur = cur_start + size + 4;
     }
-    assert(has_idat);
-    assert(has_iend);
-    assert(width != 0 && height != 0); // header must exist and give valid width/height values
+    WPNG_ASSERT(has_idat, 8);
+    WPNG_ASSERT(has_iend, 8);
+    WPNG_ASSERT(width != 0 && height != 0, 8); // header must exist
     
     if (color_type == 4 || color_type == 6)
-        assert(has_trns == 0);
+        WPNG_ASSERT(has_trns == 0, 9);
     if (color_type == 0 || color_type == 4)
-        assert(palette_size == 0);
+        WPNG_ASSERT(palette_size == 0, 9);
+    if (color_type == 3)
+        WPNG_ASSERT(palette_size != 0, 10);
     
     uint8_t temp[] = {1, 0, 3, 1, 2, 0, 4};
     uint8_t components = temp[color_type];
@@ -822,14 +855,7 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
     int error = 0;
     byte_buffer dec = do_inflate(&idat, &error, 1); // decompresses into `dec` (declared earlier)
     dec.cur = 0;
-    printf("%d\n", error);
-    if (error != 0)
-    {
-        for (size_t i = 0; i < dec.len; i += 1)
-            printf("%02X ", dec.data[i]);
-        puts("");
-    }
-    assert(error == 0);
+    WPNG_ASSERT(error == 0, 11);
     
     uint8_t * image_data = (uint8_t *)malloc(height * bytes_per_scanline);
     memset(image_data, 0, height * bytes_per_scanline);
@@ -859,11 +885,8 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         uint8_t * out_image_data = (uint8_t *)malloc(height * width * out_bpp);
         memset(out_image_data, 0, height * width * out_bpp);
         
-        puts("converting...");
-        
         if (palette_size)
         {
-            puts("depalettizing...");
             for (size_t y = 0; y < height; y += 1)
             {
                 for (size_t x = 0; x < width; x += 1)
@@ -989,11 +1012,16 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
     if (gamma >= 0.0 && !is_srgb && !(flags & WPNG_READ_SKIP_GAMMA_CORRECTION))
         apply_gamma(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, gamma);
     
-    byte_buffer out = wpng_write(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, WPNG_WRITE_ALLOW_PALLETIZATION, 9);
+    output->error = 0;
     
-    FILE * f = fopen("out.png", "wb");
-    fwrite(out.data, out.len, 1, f);
-    fclose(f);
+    output->data = image_data;
+    output->size = bytes_per_scanline * height;
+    output->bytes_per_scanline = bytes_per_scanline;
+    output->width = width;
+    output->height = height;
+    output->gamma = gamma;
+    output->bytes_per_pixel = bpp;
+    output->is_16bit = bit_depth == 16;
 }
 
 int main(int argc, char ** argv)
@@ -1043,7 +1071,31 @@ int main(int argc, char ** argv)
         
         fclose(f);
         
-        wpng_load_and_save(&in_buf, 0);
+        wpng_load_output output;
+        memset(&output, 0, sizeof(wpng_load_output));
+        wpng_load(&in_buf, 0, &output);
+        
+        if (output.error == 0)
+        {
+            puts("writing out.png");
+            
+            uint32_t width = output.width;
+            uint32_t height = output.height;
+            size_t bytes_per_scanline = output.bytes_per_scanline;
+            uint8_t bpp = output.bytes_per_pixel;
+            uint8_t is_16bit = output.is_16bit;
+            uint8_t * image_data = output.data;
+            
+            byte_buffer out = wpng_write(width, height, bpp, is_16bit, image_data, bytes_per_scanline, WPNG_WRITE_ALLOW_PALLETIZATION, 9);
+            
+            FILE * f = fopen("out.png", "wb");
+            fwrite(out.data, out.len, 1, f);
+            fclose(f);
+        }
+        else
+        {
+            printf("error: %d\n", output.error);
+        }
     }
     
 	return 0;
