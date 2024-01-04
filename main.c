@@ -8,11 +8,6 @@
 #include "inflate.h"
 #include "deflate.h"
 
-/*
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-*/
-
 #include "buffers.h"
 
 uint8_t paeth_get_ref_raw(int16_t left, int16_t up, int16_t upleft)
@@ -231,7 +226,7 @@ uint8_t * palettize(uint32_t width, uint32_t height, uint8_t bpp, uint8_t * imag
 enum {
     WPNG_WRITE_ALLOW_PALLETIZATION = 1,
 };
-void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t * image_data, size_t bytes_per_scanline, uint32_t flags)
+byte_buffer wpng_write(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t * image_data, size_t bytes_per_scanline, uint32_t flags, int8_t compression_quality)
 {
     byte_buffer out;
     memset(&out, 0, sizeof(byte_buffer));
@@ -327,32 +322,35 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
         uint8_t most_common_val = 0;
         uint64_t most_common_count = 0;
         
-        for (size_t x = 0; x < bytes_per_scanline; x++)
+        if (compression_quality > 0)
         {
-            uint8_t val = image_data[start + x];
-            hit_vals[val] += 1;
-            if (hit_vals[val] > most_common_count)
+            for (size_t x = 0; x < bytes_per_scanline; x++)
             {
-                most_common_count = hit_vals[val];
-                most_common_val = val;
+                uint8_t val = image_data[start + x];
+                hit_vals[val] += 1;
+                if (hit_vals[val] > most_common_count)
+                {
+                    most_common_count = hit_vals[val];
+                    most_common_val = val;
+                }
             }
-        }
-        
-        for (size_t x = 0; x < bytes_per_scanline; x++)
-        {
-            sum_abs_null += abs((int32_t)(int8_t)(image_data[start + x] - most_common_val));
             
-            uint16_t up   = y >    0 ? image_data[start - bytes_per_scanline + x] : 0;
-            uint16_t left = x >= bpp ? image_data[start + x - bpp] : 0;
-            uint8_t avg = (up + left) / 2;
-            sum_abs_avg += abs((int32_t)(image_data[start + x]) - (int32_t)(avg));
-            
-            sum_abs_left += abs((int32_t)(image_data[start + x]) - (int32_t)left);
-            
-            sum_abs_top += abs((int32_t)(image_data[start + x]) - (int32_t)up);
-            
-            uint8_t ref = paeth_get_ref(image_data, bytes_per_scanline, x, y, bpp);
-            sum_abs_paeth += abs((int32_t)(image_data[start + x]) - (int32_t)(ref));
+            for (size_t x = 0; x < bytes_per_scanline; x++)
+            {
+                sum_abs_null += abs((int32_t)(int8_t)(image_data[start + x] - most_common_val));
+                
+                uint16_t up   = y >    0 ? image_data[start - bytes_per_scanline + x] : 0;
+                uint16_t left = x >= bpp ? image_data[start + x - bpp] : 0;
+                uint8_t avg = (up + left) / 2;
+                sum_abs_avg += abs((int32_t)(image_data[start + x]) - (int32_t)(avg));
+                
+                sum_abs_left += abs((int32_t)(image_data[start + x]) - (int32_t)left);
+                
+                sum_abs_top += abs((int32_t)(image_data[start + x]) - (int32_t)up);
+                
+                uint8_t ref = paeth_get_ref(image_data, bytes_per_scanline, x, y, bpp);
+                sum_abs_paeth += abs((int32_t)(image_data[start + x]) - (int32_t)(ref));
+            }
         }
         
         if (y == 0)
@@ -363,7 +361,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
         if (num_unfiltered > y / height / 4)
             sum_abs_null /= 3;
         
-        if (sum_abs_null <= sum_abs_left && sum_abs_null <= sum_abs_top && sum_abs_null <= sum_abs_avg && sum_abs_null <= sum_abs_paeth)
+        if (compression_quality == 0 || (sum_abs_null <= sum_abs_left && sum_abs_null <= sum_abs_top && sum_abs_null <= sum_abs_avg && sum_abs_null <= sum_abs_paeth))
         {
             num_unfiltered += 1;
             //puts("picked filter mode 0");
@@ -411,7 +409,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     }
     
     printf("raw pixel data byte count: %zu\n", pixel_data.len);
-    bit_buffer pixel_data_comp = do_deflate(pixel_data.data, pixel_data.len, 9, 1);
+    bit_buffer pixel_data_comp = do_deflate(pixel_data.data, pixel_data.len, compression_quality, 1);
     
     bytes_push_int(&out, byteswap_int(pixel_data_comp.buffer.len, 4), 4);
     chunk_start = out.len;
@@ -423,14 +421,9 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     bytes_push_int(&out, 0, 4);
     bytes_push(&out, (const uint8_t *)"IEND\xAE\x42\x60\x82", 8);
     
-    FILE * f = fopen(filename, "wb");
-    fwrite(out.data, out.len, 1, f);
-    fclose(f);
-    
-    printf("bpp %d\n", bpp);
-    puts("saved");
-    
     free(palettized);
+    
+    return out;
 }
 
 void defilter(uint8_t * image_data, byte_buffer * dec, uint32_t width, uint32_t height, uint8_t interlace_layer, uint8_t bit_depth, uint8_t components)
@@ -545,6 +538,7 @@ enum {
     WPNG_READ_SKIP_CHECKSUMS = 1,
     WPNG_READ_SKIP_CRITICAL_CHUNKS = 2,
     WPNG_READ_SKIP_GAMMA_CORRECTION = 4,
+    WPNG_READ_ERROR_ON_BAD_ANCILLARY_CRC = 8,
 };
 
 void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
@@ -595,8 +589,8 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         chunk_count += 1;
         
         uint32_t size = byteswap_int(bytes_pop_int(buf, 4), 4);
-        assert(size < 0x80000000);
-        assert(buf->cur + size + 8 <= buf->len);
+        assert(size < 0x80000000); // must be 31 bit
+        assert(buf->cur + size + 8 <= buf->len); // must not overflow buffer
         
         size_t chunk_start = buf->cur;
         char name[5] = {0};
@@ -606,14 +600,41 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
             uint8_t upcased = name[i] | 0x20;
             assert(upcased >= 97 && upcased <= 122);
         }
+        uint8_t critical = !!(name[0] & 0x20);
         
         printf("found chunk: %s\n", name);
         
         size_t cur_start = buf->cur;
         
-        uint8_t recognized = 1;
+        uint8_t checksum_failed = 0;
+        if (!(flags & WPNG_READ_SKIP_CHECKSUMS))
+        {
+            buf->cur = cur_start + size;
+            uint32_t expected_checksum = byteswap_int(bytes_pop_int(buf, 4), 4);
+            uint32_t checksum = defl_compute_crc32(&buf->data[chunk_start], size + 4, 0);
+            checksum_failed = (checksum != expected_checksum);
+        }
+        
+        // always check CRC for critical chunks
+        if (critical)
+            assert(!checksum_failed);
+        // skip ancillary chunks with bad checksums, unless the option is set to error instead
+        if (checksum_failed)
+        {
+            if (flags & WPNG_READ_ERROR_ON_BAD_ANCILLARY_CRC)
+                assert(!checksum_failed);
+            else
+            {
+                buf->cur = cur_start + size + 4;
+                continue;
+            }
+        }
+        
+        buf->cur = cur_start;
+        
         if (memcmp(name, "IHDR", 4) == 0)
         {
+            assert(size == 13);
             assert(chunk_count == 1); // must be first
             assert(width == 0 && height == 0); // must not have multiple
             
@@ -628,9 +649,6 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
             assert(byte_pop(buf) == 0); // compression method, must always be 0 for PNGs
             assert(byte_pop(buf) == 0); // filter method, must always be 0 for PNGs
             interlacing = byte_pop(buf);
-            
-            // FIXME: not supported yet
-            //assert(interlacing == 0);
         }
         else if (memcmp(name, "sRGB", 4) == 0)
         {
@@ -775,25 +793,13 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
         }
         else
         {
-            recognized = 0;
             if (!(flags & WPNG_READ_SKIP_CRITICAL_CHUNKS))
-            {
-                assert((name[0] & 0x20) == 0); // unknown chunks must not be critical
-            }
+                assert(!critical); // unknown chunks must not be critical
         }
         
         prev_was_idat = (memcmp(name, "IDAT", 4) == 0);
         
         assert(width != 0 && height != 0); // header must exist and give valid width/height values
-        
-        // skip CRC for unrecognized chunks
-        if (recognized && !(flags & WPNG_READ_SKIP_CHECKSUMS))
-        {
-            buf->cur = cur_start + size;
-            uint32_t expected_checksum = byteswap_int(bytes_pop_int(buf, 4), 4);
-            uint32_t checksum = defl_compute_crc32(&buf->data[chunk_start], size + 4, 0);
-            assert(checksum == expected_checksum);
-        }
         
         buf->cur = cur_start + size + 4;
     }
@@ -973,16 +979,21 @@ void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
                 }
             }
         }
-        if (gamma >= 0.0 && !is_srgb && !(flags & WPNG_READ_SKIP_GAMMA_CORRECTION))
-            apply_gamma(width, height, out_bpp, bit_depth == 16, out_image_data, width * out_bpp, gamma);
-        wpng_write("out.png", width, height, out_bpp, bit_depth == 16, out_image_data, width * out_bpp, 1);
+        
+        free(image_data);
+        bpp = out_bpp;
+        image_data = out_image_data;
+        bytes_per_scanline = width * out_bpp;
     }
-    else
-    {
-        if (gamma >= 0.0 && !is_srgb && !(flags & WPNG_READ_SKIP_GAMMA_CORRECTION))
-            apply_gamma(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, gamma);
-        wpng_write("out.png", width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, 1);
-    }
+    
+    if (gamma >= 0.0 && !is_srgb && !(flags & WPNG_READ_SKIP_GAMMA_CORRECTION))
+        apply_gamma(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, gamma);
+    
+    byte_buffer out = wpng_write(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, WPNG_WRITE_ALLOW_PALLETIZATION, 9);
+    
+    FILE * f = fopen("out.png", "wb");
+    fwrite(out.data, out.len, 1, f);
+    fclose(f);
 }
 
 int main(int argc, char ** argv)
