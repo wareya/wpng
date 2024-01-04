@@ -123,6 +123,7 @@ uint32_t pal_val_expand(uint32_t val, uint8_t bpp)
 
 // image must be 8-bit y, ya, rgb, or rgba. does not support 16-bit.
 // returns null on failure, pointer on success
+// `pal` must have space for 256 entries
 uint8_t * palettize(uint32_t width, uint32_t height, uint8_t bpp, uint8_t * image_data, size_t bytes_per_scanline, size_t * size, uint32_t * pal, uint32_t * pal_count, uint32_t * arg_depth)
 {
     uint32_t palette[256] = {0};
@@ -226,7 +227,11 @@ uint8_t * palettize(uint32_t width, uint32_t height, uint8_t bpp, uint8_t * imag
     
     return output;
 }
-void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t * image_data, size_t bytes_per_scanline, uint8_t allow_palletization)
+
+enum {
+    WPNG_WRITE_ALLOW_PALLETIZATION = 1,
+};
+void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t * image_data, size_t bytes_per_scanline, uint32_t flags)
 {
     byte_buffer out;
     memset(&out, 0, sizeof(byte_buffer));
@@ -241,7 +246,7 @@ void wpng_write(const char * filename, uint32_t width, uint32_t height, uint8_t 
     uint32_t palette[256] = {0};
     uint32_t pal_count = 0;
     uint32_t pal_depth = 0;
-    uint8_t * palettized = !allow_palletization || is_16bit ? 0 : palettize(width, height, bpp, image_data, bytes_per_scanline, &palettized_size, palette, &pal_count, &pal_depth);
+    uint8_t * palettized = !(flags & WPNG_WRITE_ALLOW_PALLETIZATION) || is_16bit ? 0 : palettize(width, height, bpp, image_data, bytes_per_scanline, &palettized_size, palette, &pal_count, &pal_depth);
     
     // write header chunk
     
@@ -536,8 +541,17 @@ void defilter(uint8_t * image_data, byte_buffer * dec, uint32_t width, uint32_t 
     free(y_prev_next);
 }
 
-void wpng_load_and_save(byte_buffer * buf)
+enum {
+    WPNG_READ_SKIP_CHECKSUMS = 1,
+    WPNG_READ_SKIP_CRITICAL_CHUNKS = 2,
+    WPNG_READ_SKIP_GAMMA_CORRECTION = 4,
+};
+
+void wpng_load_and_save(byte_buffer * buf, uint32_t flags)
 {
+    // TODO:
+    // - check CRCs
+    // - check chunk name flags
 	if (buf->len < 8)
 		return;
 	if (memcmp(buf->data, "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", 8) != 0)
@@ -557,7 +571,16 @@ void wpng_load_and_save(byte_buffer * buf)
     uint16_t palette_size = 0;
     uint8_t has_idat = 0;
     uint8_t has_iend = 0;
+    
     uint8_t has_trns = 0;
+    uint8_t has_chrm = 0;
+    uint8_t has_gama = 0;
+    uint8_t has_iccp = 0;
+    uint8_t has_sbit = 0;
+    uint8_t has_bkgd = 0;
+    uint8_t has_hist = 0;
+    uint8_t has_phys = 0;
+    uint8_t has_time = 0;
     
     uint32_t transparent_r = 0xFFFFFFFF;
     uint32_t transparent_g = 0xFFFFFFFF;
@@ -575,6 +598,7 @@ void wpng_load_and_save(byte_buffer * buf)
         
         uint32_t size = byteswap_int(bytes_pop_int(buf, 4), 4);
         
+        size_t chunk_start = buf->cur;
         char name[5] = {0};
         for (size_t i = 0; i < 4; i += 1)
             name[i] = byte_pop(buf);
@@ -606,15 +630,67 @@ void wpng_load_and_save(byte_buffer * buf)
         {
             assert(palette_size == 0); // can't come after palette
             assert(!has_idat); // can't come after idat
+            assert(!is_srgb); // can't have multiple
             is_srgb = 1;
         }
         else if (memcmp(name, "gAMA", 4) == 0)
         {
             assert(palette_size == 0); // can't come after palette
             assert(!has_idat); // can't come after idat
+            assert(!has_gama); // can't have multiple
+            has_gama = 1;
             gamma = 100000.0 / byteswap_int(bytes_pop_int(buf, 4), 4);
         }
+        else if (memcmp(name, "iCCP", 4) == 0)
+        {
+            assert(palette_size == 0); // can't come after palette
+            assert(!has_idat); // can't come after idat
+            assert(!has_iccp); // can't have multiple
+            has_iccp = 1;
+        }
         else if (memcmp(name, "cHRM", 4) == 0)
+        {
+            assert(palette_size == 0); // can't come after palette
+            assert(!has_idat); // can't come after idat
+            assert(!has_chrm); // can't have multiple
+            has_chrm = 1;
+        }
+        else if (memcmp(name, "sBIT", 4) == 0)
+        {
+            assert(palette_size == 0); // can't come after palette
+            assert(!has_idat); // can't come after idat
+            assert(!has_sbit); // can't have multiple
+            has_sbit = 1;
+        }
+        else if (memcmp(name, "bKGD", 4) == 0)
+        {
+            assert(!has_idat); // can't come after idat
+            assert(!has_bkgd); // can't have multiple
+            has_bkgd = 1;
+        }
+        else if (memcmp(name, "hIST", 4) == 0)
+        {
+            assert(!has_idat); // can't come after idat
+            assert(!has_hist); // can't have multiple
+            has_hist = 1;
+        }
+        else if (memcmp(name, "pHYS", 4) == 0)
+        {
+            assert(!has_idat); // can't come after idat
+            assert(!has_phys); // can't have multiple
+            has_phys = 1;
+        }
+        else if (memcmp(name, "tIME", 4) == 0)
+        {
+            assert(!has_time); // can't have multiple
+            has_time = 1;
+        }
+        else if (memcmp(name, "sBIT", 4) == 0)
+        {
+            assert(palette_size == 0); // can't come after palette
+            assert(!has_idat); // can't come after idat
+        }
+        else if (memcmp(name, "gAMA", 4) == 0)
         {
             assert(palette_size == 0); // can't come after palette
             assert(!has_idat); // can't come after idat
@@ -628,8 +704,10 @@ void wpng_load_and_save(byte_buffer * buf)
         else if (memcmp(name, "PLTE", 4) == 0)
         {
             assert(!palette_size); // must not have multiple
-            assert(!has_idat); // must precede the first idat chunk
+            assert(!has_idat); // must precede idat chunks
             assert(!has_trns); // must not come after trns chunk
+            assert(!has_bkgd); // must not come after bkgd chunk
+            assert(!has_hist); // must not come after hist chunk
             
             assert(size % 3 == 0); // item count must be an integer
             assert(size > 0); // minimum allowed item count is 1
@@ -689,12 +767,26 @@ void wpng_load_and_save(byte_buffer * buf)
             has_iend = 1;
             break;
         }
+        else
+        {
+            if (!(flags & WPNG_READ_SKIP_CRITICAL_CHUNKS))
+            {
+                assert((name[0] & 0x10) == 0); // unknown chunks must not be critical
+            }
+        }
         
         prev_was_idat = (memcmp(name, "IDAT", 4) == 0);
         
         assert(width != 0 && height != 0); // header must exist and give valid width/height values
         
-        // TODO check checksum?
+        if (!(flags & WPNG_READ_SKIP_CHECKSUMS))
+        {
+            buf->cur = cur_start + size;
+            uint32_t expected_checksum = byteswap_int(bytes_pop_int(buf, 4), 4);
+            uint32_t checksum = defl_compute_crc32(&buf->data[chunk_start], size + 4, 0);
+            assert(checksum == expected_checksum);
+        }
+        
         buf->cur = cur_start + size + 4;
     }
     assert(has_idat);
@@ -873,13 +965,13 @@ void wpng_load_and_save(byte_buffer * buf)
                 }
             }
         }
-        if (gamma >= 0.0 && !is_srgb)
+        if (gamma >= 0.0 && !is_srgb && !(flags & WPNG_READ_SKIP_GAMMA_CORRECTION))
             apply_gamma(width, height, out_bpp, bit_depth == 16, out_image_data, width * out_bpp, gamma);
         wpng_write("out.png", width, height, out_bpp, bit_depth == 16, out_image_data, width * out_bpp, 1);
     }
     else
     {
-        if (gamma >= 0.0 && !is_srgb)
+        if (gamma >= 0.0 && !is_srgb && !(flags & WPNG_READ_SKIP_GAMMA_CORRECTION))
             apply_gamma(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, gamma);
         wpng_write("out.png", width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, 1);
     }
@@ -932,7 +1024,7 @@ int main(int argc, char ** argv)
         
         fclose(f);
         
-        wpng_load_and_save(&in_buf);
+        wpng_load_and_save(&in_buf, 0);
     }
     
 	return 0;
