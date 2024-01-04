@@ -134,13 +134,13 @@ uint8_t * palettize(uint32_t width, uint32_t height, uint8_t bpp, uint8_t * imag
                 val <<= 8;
                 val |= image_data[y * bytes_per_scanline + x * bpp + j];
             }
-            
             val = pal_val_expand(val, bpp);
+            
             size_t index = 0;
             while (index < 256 && palette[index] != val)
                 index += 1;
             
-            if (index == 256)
+            if (index == 256 || palette_i == 0)
             {
                 if (palette_i == 256)
                     return 0;
@@ -189,9 +189,10 @@ uint8_t * palettize(uint32_t width, uint32_t height, uint8_t bpp, uint8_t * imag
             }
             val = pal_val_expand(val, bpp);
             
-            uint32_t index = 0;
-            while (index < palette_i && palette[index] != val)
+            size_t index = 0;
+            while (index < 256 && palette[index] != val)
                 index += 1;
+            
             assert(index < palette_i);
             
             uint8_t n = x % (8 / depth);
