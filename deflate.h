@@ -165,7 +165,7 @@ typedef struct _huff_node {
     uint16_t symbol;
 } huff_node_t;
 
-static huff_node_t * alloc_huff_node()
+static huff_node_t * alloc_huff_node(void)
 {
     return (huff_node_t *)DEFL_MALLOC(sizeof(huff_node_t));
 }
