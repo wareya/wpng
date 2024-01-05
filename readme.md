@@ -2,6 +2,8 @@
 
 WPNG is a header-only PNG implementation written in C99/C++11. It supports decoding all standard formats, and encoding non-interlaced images with optional automatic palettization (if the image only has 256 or fewer colors).
 
+Not fuzzed yet.
+
 ## TODO
 
 - chunk read/write callbacks
