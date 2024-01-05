@@ -39,6 +39,22 @@ Add all the `.h` files from this repository to your project, then include `wpng_
 
         // supported flags:
         // WPNG_WRITE_ALLOW_PALLETIZATION
+
+        // Layout of wpng_load_output:
+
+        typedef struct {
+            uint8_t * data;
+            size_t size;
+            size_t bytes_per_scanline;
+            uint32_t width;
+            uint32_t height;
+            float gamma;
+            uint8_t bytes_per_pixel;
+            uint8_t is_16bit;
+            uint8_t was_16bit;
+            uint8_t was_srgb;
+            uint8_t error;
+        } wpng_load_output;
 ```
 
 In the future, a single-file version will be available.
