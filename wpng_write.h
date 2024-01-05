@@ -101,6 +101,7 @@ static uint8_t * palettize(uint32_t width, uint32_t height, uint8_t bpp, uint8_t
     size_t out_bps = (width * depth + 7) / 8;
     
     uint8_t * output = (uint8_t *)malloc(out_bps * height);
+    assert(output);
     memset(output, 0, out_bps * height);
     
     for (size_t y = 0; y < height; y += 1)

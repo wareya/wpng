@@ -283,6 +283,7 @@ size_t gen_canonical_code(uint64_t * counts, huff_node_t ** unordered_dict, huff
     for (size_t i = 0; i < capacity; i += 1)
     {
         unordered_dict[i] = alloc_huff_node();
+        assert(unordered_dict[i]);
         unordered_dict[i]->symbol = counts[i] & ((1 << symbol_bits) - 1);
         unordered_dict[i]->code = 0;
         unordered_dict[i]->code_len = 0;
@@ -330,6 +331,7 @@ size_t gen_canonical_code(uint64_t * counts, huff_node_t ** unordered_dict, huff
         
         // make new node
         huff_node_t * new_node = alloc_huff_node();
+        assert(new_node);
         new_node->symbol = 0;
         new_node->code = 0;
         new_node->code_len = 0;
@@ -588,7 +590,9 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
     
     defl_hashmap hashmap;
     hashmap.hashtable = (uint32_t *)DEFL_MALLOC(sizeof(uint32_t) * (1 << DEFL_HASH_SIZE));
+    assert(hashmap.hashtable);
     hashmap.prevlink = (uint32_t *)DEFL_MALLOC(sizeof(uint32_t) * (1 << DEFL_PREVLINK_SIZE));
+    assert(hashmap.prevlink);
     memset(hashmap.hashtable, 0, sizeof(uint32_t) * (1 << DEFL_HASH_SIZE));
     memset(hashmap.prevlink, 0, sizeof(uint32_t) * (1 << DEFL_PREVLINK_SIZE));
     
@@ -645,6 +649,7 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
     
     // commands have 4 numbers: size, pointer, lb_size, and distance
     uint64_t * commands = (uint64_t *)DEFL_MALLOC(sizeof(uint64_t) * chunk_max_commands * 4);
+    assert(commands);
     size_t command_count = 0;
     
     // store only

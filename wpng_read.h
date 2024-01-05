@@ -110,6 +110,8 @@ static void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, 
     
     uint8_t * y_prev = (uint8_t *)malloc(bytes_per_scanline);
     uint8_t * y_prev_next = (uint8_t *)malloc(bytes_per_scanline);
+    assert(y_prev);
+    assert(y_prev_next);
     memset(y_prev, 0, bytes_per_scanline);
     memset(y_prev_next, 0, bytes_per_scanline);
     
@@ -238,6 +240,8 @@ static inline uint8_t u16_to_u8(uint16_t val)
 static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
 {
     assert(output);
+    assert(buf);
+    assert(buf->data);
     
     #define WPNG_ASSERT(COND, ERRVAL) { if (!(COND)) { output->error = (ERRVAL); return; } }
     // 1 - chunk size error
@@ -538,6 +542,7 @@ static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * outp
     WPNG_ASSERT(error == 0, 11);
     
     uint8_t * image_data = (uint8_t *)malloc(height * bytes_per_scanline);
+    assert(image_data);
     memset(image_data, 0, height * bytes_per_scanline);
     
     if (!interlacing)
