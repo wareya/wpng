@@ -13,11 +13,16 @@ WPNG is a header-only PNG implementation written in C99/C++11. It supports decod
 Add all the `.h` files from this repository to your project, then include `wpng_write.h` and/or `wpng_read.h`. Then, use as:
 
 ```c
+        // READING:
+        
+        // raw_data is a (uint8_t *) pointing to raw PNG data; file_len is a size_t containing how many bytes there are in that data
+        byte_buffer in_buf = {raw_data, file_len, file_len, 0};
+
         wpng_load_output output;
         memset(&output, 0, sizeof(wpng_load_output));
         wpng_load(&in_buf, 0 /* <- flags */, &output);
         
-        // ...
+        // WRITING:
         
         byte_buffer out = wpng_write(width, height, bytes_per_pixel, is_16bit, image_data /* <- (uint8_t *) */, bytes_per_scanline, WPNG_WRITE_ALLOW_PALLETIZATION /* <- flags */, 9 /* <- DEFLATE compression quality */ );
         // PNG file data now resides in out.data (uint8_t *) and is out.len (size_t) bytes long
