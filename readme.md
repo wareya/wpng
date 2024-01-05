@@ -47,7 +47,7 @@ In the future, a single-file version will be available.
 
 ## Documentation
 
-```
+```c
         // Layout of wpng_load_output:
         
         typedef struct {
