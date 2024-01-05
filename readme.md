@@ -41,20 +41,21 @@ Add all the `.h` files from this repository to your project, then include `wpng_
         // WPNG_WRITE_ALLOW_PALLETIZATION
 
         // Layout of wpng_load_output:
-
+        
         typedef struct {
-            uint8_t * data;
-            size_t size;
-            size_t bytes_per_scanline;
-            uint32_t width;
-            uint32_t height;
-            float gamma;
-            uint8_t bytes_per_pixel;
-            uint8_t is_16bit;
-            uint8_t was_16bit;
-            uint8_t was_srgb;
-            uint8_t error;
+            uint8_t * data;               // u8 array
+            size_t size;                  // size of array
+            size_t bytes_per_scanline;    // width
+            uint32_t width;               // height
+            uint32_t height;              // bytes per pixel
+            float gamma;                  // is 16 bit or not (decoder output)
+            uint8_t bytes_per_pixel;      // was originally 16 bit or not (original png file)
+            uint8_t is_16bit;             // png file specified that it was srgb or not
+            uint8_t was_16bit;            // scanline byte count
+            uint8_t was_srgb;             // gamma (-1 if unset or srgb)
+            uint8_t error;                
         } wpng_load_output;
+        // NOTE: the decoder ALWAYS output srgb data, even if was_srgb is unset!
 ```
 
 In the future, a single-file version will be available.
