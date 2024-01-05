@@ -2,6 +2,29 @@
 
 WPNG is a header-only PNG implementation written in C99/C++11. It supports decoding all standard formats, and encoding non-interlaced images with optional automatic palettization (if the image only has 256 or fewer colors).
 
+## TODO
+
+- chunk read/write callbacks
+- text chunks
+- CLI regression automation (main.c has code to test against libpng, but it's invoked manually for now)
+
+## Usage
+
+Add all the `.h` files from this repository to your project, then include `wpng_write.h` and/or `wpng_read.h`. Then, use as:
+
+```c
+        wpng_load_output output;
+        memset(&output, 0, sizeof(wpng_load_output));
+        wpng_load(&in_buf, 0 /* <- flags */, &output);
+        
+        // ...
+        
+        byte_buffer out = wpng_write(width, height, bytes_per_pixel, is_16bit, image_data /* <- (uint8_t *) */, bytes_per_scanline, WPNG_WRITE_ALLOW_PALLETIZATION /* <- flags */, 9 /* <- DEFLATE compression quality */ );
+        // PNG file data now resides in out.data (uint8_t *) and is out.len (size_t) bytes long
+```
+
+In the future, a single-file version will be available.
+
 ## Compliance
 
 WPNG's decoder produces bit-for-bit identical output when compared to libpng, for PngSuite and for libpng's test images, with the following exceptions:
