@@ -23,11 +23,22 @@ Add all the `.h` files from this repository to your project, then include `wpng_
         wpng_load_output output;
         memset(&output, 0, sizeof(wpng_load_output));
         wpng_load(&in_buf, 0 /* <- flags */, &output);
+
+        // Supported flags:
+        // WPNG_READ_SKIP_CRC = 1, // don't check chunk CRCs 
+        // WPNG_READ_SKIP_CRITICAL_CHUNKS = 2, // skip unknown critical chunks
+        // WPNG_READ_SKIP_GAMMA_CORRECTION = 4, // don't apply gamma correction
+        // WPNG_READ_SKIP_IDAT_CRC = 8, // like chrome
+        // WPNG_READ_ERROR_ON_BAD_ANCILLARY_CRC = 16, // treat chunks with bad CRCs like unknown chunks
+        // WPNG_READ_FORCE_8BIT = 256, // convert 16-bit images to 8-bit on load
         
         // WRITING:
         
         byte_buffer out = wpng_write(width, height, bytes_per_pixel, is_16bit, image_data /* <- (uint8_t *) */, bytes_per_scanline, WPNG_WRITE_ALLOW_PALLETIZATION /* <- flags */, 9 /* <- DEFLATE compression quality */ );
         // PNG file data now resides in out.data (uint8_t *) and is out.len (size_t) bytes long
+
+        // supported flags:
+        // WPNG_WRITE_ALLOW_PALLETIZATION
 ```
 
 In the future, a single-file version will be available.
