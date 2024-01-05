@@ -9,6 +9,7 @@
 #include "buffers.h"
 #include "wpng_common.h"
 
+#ifndef TEST_VS_LIBPNG
 static double to_srgb(double x)
 {
     if (x > 0.0031308)
@@ -16,6 +17,7 @@ static double to_srgb(double x)
     else
         return 12.92 * x;
 }
+#endif
 
 static uint16_t apply_gamma_u16(uint16_t val, double gamma)
 {
