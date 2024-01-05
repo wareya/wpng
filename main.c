@@ -13,7 +13,13 @@
 // todo:
 // - text chunks
 // - unknown chunk reading callback
-// - 
+// - chunk writing hooks
+
+#define TEST_VS_LIBPNG
+
+#ifdef TEST_VS_LIBPNG
+#include <png.h>
+#endif
 
 uint8_t paeth_get_ref_raw(int16_t left, int16_t up, int16_t upleft)
 {
@@ -42,7 +48,7 @@ uint8_t paeth_get_ref(uint8_t * image_data, uint32_t bytes_per_scanline, uint32_
     return paeth_get_ref_raw(left, up, upleft);
 }
 
-float to_srgb(float x)
+double to_srgb(double x)
 {
     if (x > 0.0031308)
         return 1.055 * (pow(x, (1.0 / 2.4))) - 0.055;
@@ -50,13 +56,27 @@ float to_srgb(float x)
         return 12.92 * x;
 }
 
-uint16_t apply_gamma_u16(uint16_t val, float gamma)
+uint16_t apply_gamma_u16(uint16_t val, double gamma)
 {
+#ifdef TEST_VS_LIBPNG
+    // FIXME / FILE A BUG REPORT:
+    // libpng 1.6.40's high-level interface handles the gAMA chunk wrong
+    // it's supposed to generate sRGB image data, but it actually generates gamma 2.2 image data
+    return round(pow(val / 65535.0, gamma / 2.2) * 65535.0);
+#else
     return round(to_srgb(pow(val / 65535.0, gamma)) * 65535.0);
+#endif
 }
-uint8_t apply_gamma_u8(uint8_t val, float gamma)
+uint8_t apply_gamma_u8(uint8_t val, double gamma)
 {
+#ifdef TEST_VS_LIBPNG
+    // FIXME / FILE A BUG REPORT:
+    // libpng 1.6.40's high-level interface handles the gAMA chunk wrong
+    // it's supposed to generate sRGB image data, but it actually generates gamma 2.2 image data
+    return round(pow(val / 255.0, gamma / 2.2) * 255.0);
+#else
     return round(to_srgb(pow(val / 255.0, gamma)) * 255.0);
+#endif
 }
 
 void apply_gamma(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t * image_data, size_t bytes_per_scanline, float gamma)
@@ -278,6 +298,8 @@ byte_buffer wpng_write(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_
     size_t chunk_size = out.len - chunk_start;
     bytes_push_int(&out, byteswap_int(defl_compute_crc32(&out.data[chunk_start], chunk_size, 0), 4), 4);
     
+    bytes_push(&out, (uint8_t *)"\0\0\0\1sRGB\0\xAE\xCE\x1C\xE9", 13); // sRGB
+    
     if (palettized)
     {
         // palette chunk
@@ -462,7 +484,7 @@ void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, uint32_
     size_t output_bps = min_bytes * components * width;
     //printf("%lld %d %d %d\n", dec->len, output_bps, output_bps * (height - y_init + y_gap - 1) / y_gap, height);
     
-    // /printf("%lld %d %d %lld %lld\n", height, interlace_layer, bytes_per_scanline, min_bytes, output_bps);
+    //printf("!!! %lld %d %d %lld %lld\n", height, interlace_layer, bytes_per_scanline, min_bytes, output_bps);
     
     uint8_t * y_prev = (uint8_t *)malloc(bytes_per_scanline);
     uint8_t * y_prev_next = (uint8_t *)malloc(bytes_per_scanline);
@@ -520,13 +542,18 @@ void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, uint32_
             if (bit_depth < 8)
             {
                 size_t start = y * output_bps;
-                size_t x_out = (x_gap * x + x_init) * 8 / bit_depth;
+                size_t x_out = (x_gap * x) * 8 / bit_depth + x_init;
                 for (size_t i = 0; i < 8 / bit_depth; i++)
                 {
                     if (i * x_gap + x_out >= width)
+                    {
+                        //printf("breaking at %d\n", i);
                         break;
+                    }
                     uint8_t val = byte >> (8 - (bit_depth * (i + 1)));
                     val &= (1 << bit_depth) - 1;
+                    //if (interlace_layer == 6)
+                    //    printf("asdf %d %d\n", start + x_out + x_gap * i, val);
                     assert(start + x_out + x_gap * i < data_size);
                     image_data[start + x_out + x_gap * i] = val;
                 }
@@ -575,6 +602,7 @@ typedef struct {
     float gamma;
     uint8_t bytes_per_pixel;
     uint8_t is_16bit;
+    uint8_t was_16bit;
     uint8_t error;
 } wpng_load_output;
 
@@ -857,6 +885,8 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
         
         buf->cur = cur_start + size + 4;
     }
+    uint8_t was_16bit = bit_depth == 16;
+    
     WPNG_ASSERT(has_idat, 8);
     WPNG_ASSERT(has_iend, 8);
     WPNG_ASSERT(width != 0 && height != 0, 8); // header must exist
@@ -894,7 +924,7 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
     // convert to Y/YA/RGB/RGBA if needed
     
     uint8_t out_bpp = components + has_trns;
-    if (palette_size)
+    if (color_type == 3)
         out_bpp = 3 + has_trns;
     if (bit_depth == 16 && !(flags & WPNG_READ_FORCE_8BIT))
         out_bpp *= 2;
@@ -904,12 +934,12 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
     // - image has an alpha override (trns chunk) (whether indexed or cutoff)
     // - image is 1, 2, or 4 bits per channel (e.g. grayscale)
     // - image is 16 bits per pixel and WPNG_READ_FORCE_8BIT is enabled
-    if (palette_size || has_trns || bit_depth < 8)
+    if (color_type == 3 || has_trns || bit_depth < 8 || out_bpp != bpp)
     {
         uint8_t * out_image_data = (uint8_t *)malloc(height * width * out_bpp);
         memset(out_image_data, 0, height * width * out_bpp);
         
-        if (palette_size)
+        if (color_type == 3)
         {
             for (size_t y = 0; y < height; y += 1)
             {
@@ -955,6 +985,9 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
                     {
                         uint8_t val = image_data[y * bytes_per_scanline + x];
                         
+                        if (has_trns)
+                            out_image_data[(y * width + x) * out_bpp + 1] = val == transparent_r ? 0 : 0xFF;
+                        
                         if (bit_depth == 1)
                             val *= 0xFF;
                         else if (bit_depth == 2)
@@ -963,11 +996,11 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
                             val *= 0x11;
                         
                         out_image_data[(y * width + x) * out_bpp] = val;
-                        if (has_trns)
-                            out_image_data[(y * width + x) * out_bpp + 1] = val == transparent_r ? 0 : 0xFF;
                     }
                 }
             }
+            if (bit_depth == 16 && (flags & WPNG_READ_FORCE_8BIT))
+                bit_depth = 8;
         }
         else if (components == 3)
         {
@@ -1023,6 +1056,8 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
                     }
                 }
             }
+            if (bit_depth == 16 && (flags & WPNG_READ_FORCE_8BIT))
+                bit_depth = 8;
         }
         else // components == 2 or 4
         {
@@ -1032,12 +1067,10 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
                 for (size_t x = 0; x < width * components; x += 1)
                 {
                     size_t i = y * bytes_per_scanline;
-                    
-                    uint16_t val = ((uint16_t)image_data[i + x * 2] << 8) | image_data[i + x * 2 + 1];
-                    out_image_data[(y * width + x) * out_bpp + 0] = val >> 8;
-                    out_image_data[(y * width + x) * out_bpp + 1] = val & 0xFF;
+                    out_image_data[(y * width) * out_bpp + x] = image_data[i + x * 2];
                 }
             }
+            bit_depth = 8;
         }
         
         free(image_data);
@@ -1045,8 +1078,10 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
         image_data = out_image_data;
         bytes_per_scanline = width * out_bpp;
     }
+    if (is_srgb || (flags & WPNG_READ_SKIP_GAMMA_CORRECTION))
+        gamma = -1.0;
     
-    if (gamma >= 0.0 && !is_srgb && !(flags & WPNG_READ_SKIP_GAMMA_CORRECTION))
+    if (gamma >= 0.0)
         apply_gamma(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, gamma);
     
     output->error = 0;
@@ -1059,6 +1094,7 @@ void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
     output->gamma = gamma;
     output->bytes_per_pixel = bpp;
     output->is_16bit = bit_depth == 16;
+    output->was_16bit = was_16bit;
 }
 
 int main(int argc, char ** argv)
@@ -1110,7 +1146,75 @@ int main(int argc, char ** argv)
         
         wpng_load_output output;
         memset(&output, 0, sizeof(wpng_load_output));
+        
+#ifdef TEST_VS_LIBPNG
+        wpng_load(&in_buf, WPNG_READ_FORCE_8BIT, &output);
+#else
         wpng_load(&in_buf, 0, &output);
+#endif
+        
+#ifdef TEST_VS_LIBPNG
+        // skip test if original image has gamma and was 16 bit
+        if (!(output.was_16bit && output.gamma != -1.0))
+        {
+            png_image image;
+            memset(&image, 0, sizeof(image));
+            image.version = PNG_IMAGE_VERSION;
+            
+            assert(png_image_begin_read_from_memory(&image, raw_data, file_len) != 0);
+            
+            uint8_t components = output.bytes_per_pixel / (output.is_16bit + 1);
+            if (components == 1)
+                image.format = PNG_FORMAT_GRAY;
+            if (components == 2)
+                image.format = PNG_FORMAT_GA;
+            if (components == 3)
+                image.format = PNG_FORMAT_RGB;
+            if (components == 4)
+                image.format = PNG_FORMAT_RGBA;
+
+            png_bytep buffer;
+            size_t libpng_size = PNG_IMAGE_SIZE(image);
+            if (libpng_size != output.size)
+            {
+                printf("%zu %zu (%d (%d %d))\n", libpng_size, output.size, components, output.bytes_per_pixel, output.is_16bit + 1);
+                assert(libpng_size == output.size);
+            }
+            buffer = malloc(libpng_size);
+
+            assert(png_image_finish_read(&image, NULL, buffer, 0, NULL) != 0);
+            
+            size_t good_count = 0;
+            if (output.gamma == -1.0)
+            {
+                while (good_count < output.size && output.data[good_count] == buffer[good_count])
+                    good_count += 1;
+            }
+            else
+            {
+                while (good_count < output.size && abs((int16_t)(uint16_t)output.data[good_count] - (int16_t)(uint16_t)buffer[good_count]) <= 1)
+                    good_count += 1;
+            }
+            if (good_count != output.size)
+            {
+                for (size_t i = 0; i < libpng_size && i < 512; i += 1)
+                    printf("%02X ", buffer[i]);
+                puts("");
+                for (size_t i = 0; i < libpng_size && i < 512; i += 1)
+                    printf("%02X ", output.data[i]);
+                puts("");
+                
+                printf("%d\n", output.is_16bit);
+                
+                printf("%d\n", components);
+                printf("%zu %zu\n", good_count, output.size);
+                printf("vals: %02X %02X\n", output.data[good_count], buffer[good_count]);
+                //assert(good_count == output.size);
+            }
+            
+            free(buffer);
+        }
+#endif // TEST_VS_LIBPNG
         
         if (output.error == 0)
         {
