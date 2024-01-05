@@ -6,6 +6,7 @@
 
 #include <stdint.h> // basic types
 #include <stdlib.h> // size_t
+#include <stdio.h> // printf
 
 #include "buffers.h"
 

@@ -1,11 +1,9 @@
-
-
 #ifdef TEST_VS_LIBPNG
 #include <png.h>
 #endif
 
-#include "wpng_write.h"
 #include "wpng_read.h"
+#include "wpng_write.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -13,7 +11,6 @@
 #include <string.h>
 #include <assert.h>
 #include <math.h>
-
 
 // todo:
 // - text chunks
