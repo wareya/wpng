@@ -103,7 +103,7 @@ int main(int argc, char ** argv)
                 printf("%zu %zu (%d (%d %d))\n", libpng_size, output.size, components, output.bytes_per_pixel, output.is_16bit + 1);
                 assert(libpng_size == output.size);
             }
-            buffer = malloc(libpng_size);
+            buffer = (uint8_t *)malloc(libpng_size);
 
             assert(png_image_finish_read(&image, NULL, buffer, 0, NULL) != 0);
             
