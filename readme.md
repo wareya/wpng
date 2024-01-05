@@ -12,7 +12,11 @@ Not fuzzed yet.
 
 ## Usage
 
-Add all the `.h` files from this repository to your project, then include `wpng_write.h` and/or `wpng_read.h`. Then, use as:
+Add all the `.h` files from this repository to your project, then include `wpng_write.h` and/or `wpng_read.h`.
+
+In the future, a single-file version will be available.
+
+## Usage
 
 ```c
         // READING:
@@ -39,7 +43,11 @@ Add all the `.h` files from this repository to your project, then include `wpng_
 
         // supported flags:
         // WPNG_WRITE_ALLOW_PALLETIZATION
+```
 
+## Documentation
+
+```
         // Layout of wpng_load_output:
         
         typedef struct {
@@ -56,9 +64,22 @@ Add all the `.h` files from this repository to your project, then include `wpng_
             uint8_t error;                
         } wpng_load_output;
         // NOTE: the decoder ALWAYS output srgb data, even if was_srgb is unset!
-```
 
-In the future, a single-file version will be available.
+        // Decoder error codes:
+        
+        // 1 - chunk size error
+        // 2 - buffer overflow
+        // 3 - invalid chunk name
+        // 4 - failed crc
+        // 5 - chunk syntax error or invalid value within chunk
+        // 6 - chunk ordering error
+        // 7 - unknown critical chunk
+        // 8 - missing mandatory chunk (IHDR/IDAT/IEND)
+        // 9 - has chunk that's forbidden for given color format
+        // 10 - missing contextual mandatory chunk (PLTE on indexed images)
+        // 11 - invalid zlib data
+        // 255 - not a png file
+```
 
 ## Compliance
 
