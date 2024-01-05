@@ -342,6 +342,9 @@ static byte_buffer wpng_write(uint32_t width, uint32_t height, uint8_t bpp, uint
     chunk_size = out.len - chunk_start;
     bytes_push_int(&out, byteswap_int(defl_compute_crc32(&out.data[chunk_start], chunk_size, 0), 4), 4);
     
+    if (pixel_data_comp.buffer.data)
+        free(pixel_data_comp.buffer.data);
+    
     bytes_push_int(&out, 0, 4);
     bytes_push(&out, (const uint8_t *)"IEND\xAE\x42\x60\x82", 8);
     

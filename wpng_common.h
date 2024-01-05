@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <math.h>
 
-static uint8_t paeth_get_ref_raw(int16_t left, int16_t up, int16_t upleft)
+static inline uint8_t paeth_get_ref_raw(int16_t left, int16_t up, int16_t upleft)
 {
     int16_t lin = left + up - upleft;
     int16_t diff_left   = abs(lin - left);
@@ -21,7 +21,7 @@ static uint8_t paeth_get_ref_raw(int16_t left, int16_t up, int16_t upleft)
     
     return ref;
 }
-static uint8_t paeth_get_ref(uint8_t * image_data, uint32_t bytes_per_scanline, uint32_t x, uint32_t y, uint8_t bpp)
+static inline uint8_t paeth_get_ref(uint8_t * image_data, uint32_t bytes_per_scanline, uint32_t x, uint32_t y, uint8_t bpp)
 {
     int16_t left   = x >= bpp ? image_data[y * bytes_per_scanline + x - bpp] : 0;
     int16_t up     = y >    0 ? image_data[(y - 1) * bytes_per_scanline + x] : 0;

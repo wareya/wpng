@@ -1,11 +1,4 @@
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <assert.h>
-#include <math.h>
 
-#define TEST_VS_LIBPNG
 
 #ifdef TEST_VS_LIBPNG
 #include <png.h>
@@ -13,6 +6,14 @@
 
 #include "wpng_write.h"
 #include "wpng_read.h"
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include <math.h>
+
 
 // todo:
 // - text chunks
@@ -160,9 +161,9 @@ int main(int argc, char ** argv)
             
             byte_buffer out = wpng_write(width, height, bpp, is_16bit, image_data, bytes_per_scanline, WPNG_WRITE_ALLOW_PALLETIZATION, 9);
             
-            FILE * f = fopen("out.png", "wb");
-            fwrite(out.data, out.len, 1, f);
-            fclose(f);
+            FILE * f2 = fopen("out.png", "wb");
+            fwrite(out.data, out.len, 1, f2);
+            fclose(f2);
         }
         else
         {

@@ -587,10 +587,10 @@ static bit_buffer do_deflate(const uint8_t * input, uint64_t input_len, int8_t q
         quality_level = -12;
     
     defl_hashmap hashmap;
-    hashmap.hashtable = (uint32_t *)DEFL_MALLOC(sizeof(uint32_t *) * (1 << DEFL_HASH_SIZE));
-    hashmap.prevlink = (uint32_t *)DEFL_MALLOC(sizeof(uint32_t *) * (1 << DEFL_PREVLINK_SIZE));
-    memset(hashmap.hashtable, 0, sizeof(uint32_t *) * (1 << DEFL_HASH_SIZE));
-    memset(hashmap.prevlink, 0, sizeof(uint32_t *) * (1 << DEFL_PREVLINK_SIZE));
+    hashmap.hashtable = (uint32_t *)DEFL_MALLOC(sizeof(uint32_t) * (1 << DEFL_HASH_SIZE));
+    hashmap.prevlink = (uint32_t *)DEFL_MALLOC(sizeof(uint32_t) * (1 << DEFL_PREVLINK_SIZE));
+    memset(hashmap.hashtable, 0, sizeof(uint32_t) * (1 << DEFL_HASH_SIZE));
+    memset(hashmap.prevlink, 0, sizeof(uint32_t) * (1 << DEFL_PREVLINK_SIZE));
     
     int8_t chain_bits = quality_level - 1 + (quality_level < 0);
     if (chain_bits < 0)

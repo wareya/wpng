@@ -207,30 +207,21 @@ enum {
 };
 
 // output:
-// u8 array
-// size of array
-// width
-// height
-// bytes per pixel
-// is 16 bit or not (decoder output)
-// was originally 16 bit or not (original png file)
-// png file specified that it was srgb or not
-///// NOTE: the decoder ALWAYS output srgb data!
-// scanline byte count
-// gamma (-1 if unset or srgb)
+
 typedef struct {
-    uint8_t * data;
-    size_t size;
-    size_t bytes_per_scanline;
-    uint32_t width;
-    uint32_t height;
-    float gamma;
-    uint8_t bytes_per_pixel;
-    uint8_t is_16bit;
-    uint8_t was_16bit;
-    uint8_t was_srgb;
-    uint8_t error;
+    uint8_t * data;               // u8 array
+    size_t size;                  // size of array
+    size_t bytes_per_scanline;    // width
+    uint32_t width;               // height
+    uint32_t height;              // bytes per pixel
+    float gamma;                  // is 16 bit or not (decoder output)
+    uint8_t bytes_per_pixel;      // was originally 16 bit or not (original png file)
+    uint8_t is_16bit;             // png file specified that it was srgb or not
+    uint8_t was_16bit;            // scanline byte count
+    uint8_t was_srgb;             // gamma (-1 if unset or srgb)
+    uint8_t error;                
 } wpng_load_output;
+// NOTE: the decoder ALWAYS output srgb data, even if was_srgb is unset!
 
 static inline uint8_t u16_to_u8(uint16_t val)
 {
@@ -720,6 +711,9 @@ static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * outp
     
     if (gamma >= 0.0)
         apply_gamma(width, height, bpp, bit_depth == 16, image_data, bytes_per_scanline, gamma);
+    
+    if (dec.data)
+        free(dec.data);
     
     output->error = 0;
     
