@@ -98,8 +98,9 @@ static void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits,
     uint16_t literal = 256;
     do
     {
-        literal = code_lits[read_huff_code(input, code_by_len, &huff_error)];
+        uint16_t lit_code = read_huff_code(input, code_by_len, &huff_error);
         ASSERT_OR_BROKEN_FILE(huff_error == 0,)
+        literal = code_lits[lit_code];
         ASSERT_OR_BROKEN_FILE(literal <= 285,)
         
         if (literal < 256)
@@ -115,8 +116,9 @@ static void do_lz77(bit_buffer * input, byte_buffer * ret, uint16_t * code_lits,
             uint16_t len_mins[29] = {3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258};
             uint16_t len = len_mins[literal-257] + bits_pop(input, len_extra_bits);
             
-            uint16_t dist_literal = dist_code_lits[read_huff_code(input, dist_code_by_len, &huff_error)];
+            uint16_t dist_code = read_huff_code(input, dist_code_by_len, &huff_error);
             ASSERT_OR_BROKEN_FILE(huff_error == 0,)
+            uint16_t dist_literal = dist_code_lits[dist_code];
             ASSERT_OR_BROKEN_FILE(dist_literal <= 29,)
             
             uint8_t dist_extra_bits = 0;
@@ -281,9 +283,10 @@ static byte_buffer do_inflate(byte_buffer * input_bytes, int * error, uint8_t he
             uint8_t raw_code_lens[288 + 32] = {0};
             for (size_t i = 0; i < len_count + dist_count; i += 1)
             {
-                uint16_t inst = inst_code_lits[read_huff_code(&input, inst_code_by_len, &huff_error)];
-                //printf("\t\t\t\t\t(for value %d)\n", i < 288 ? i : i - 288);
+                uint16_t inst_code = read_huff_code(&input, inst_code_by_len, &huff_error);
                 ASSERT_OR_BROKEN_FILE(huff_error == 0, ret)
+                uint16_t inst = inst_code_lits[inst_code];
+                //printf("\t\t\t\t\t(for value %d)\n", i < 288 ? i : i - 288);
                 
                 if (inst < 16)
                     raw_code_lens[i] = inst;

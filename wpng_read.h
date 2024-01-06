@@ -79,6 +79,8 @@ static void apply_gamma(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is
 
 static void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, uint32_t width, uint32_t height, uint8_t interlace_layer, uint8_t bit_depth, uint8_t components, uint8_t * error)
 {
+    #define WPNG_ASSERT(COND, ERRVAL) { if (!(COND)) { *error = (ERRVAL); return; } }
+    
     // interlace_layer:
     // 0: not interlaced
     // 1~7: adam7 interlace layers
@@ -113,8 +115,8 @@ static void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, 
     
     uint8_t * y_prev = (uint8_t *)malloc(bytes_per_scanline);
     uint8_t * y_prev_next = (uint8_t *)malloc(bytes_per_scanline);
-    assert(y_prev);
-    assert(y_prev_next);
+    WPNG_ASSERT(y_prev, 100);
+    WPNG_ASSERT(y_prev_next, 100);
     memset(y_prev, 0, bytes_per_scanline);
     memset(y_prev_next, 0, bytes_per_scanline);
     
@@ -139,7 +141,7 @@ static void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, 
         //puts("--");
         //printf("%lld %lld\n", dec->cur + bytes_per_scanline, dec->len);
         //printf("%lld %d %d %lld\n", y, height, interlace_layer, bytes_per_scanline);
-        assert(dec->cur + bytes_per_scanline <= dec->len);
+        WPNG_ASSERT(dec->cur + bytes_per_scanline <= dec->len, 1);
         
         //printf("at y %d ", y);
         //if (filter_type == 0)
@@ -204,6 +206,8 @@ static void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, 
     
     free(y_prev);
     free(y_prev_next);
+    
+    #undef WPNG_ASSERT
 }
 
 enum {
@@ -263,6 +267,7 @@ static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * outp
     // 9 - has chunk that's forbidden for given color format
     // 10 - missing contextual mandatory chunk (PLTE on indexed images)
     // 11 - invalid zlib data
+    // 100 - allocation failure
     // 255 - not a png file
     
 	if (buf->len < 8 || memcmp(buf->data, "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", 8) != 0)
@@ -550,7 +555,7 @@ static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * outp
     WPNG_ASSERT(error == 0, 11);
     
     uint8_t * image_data = (uint8_t *)malloc(height * bytes_per_scanline);
-    assert(image_data);
+    WPNG_ASSERT(image_data, 100);
     memset(image_data, 0, height * bytes_per_scanline);
     
     uint8_t defilter_error = 0;
@@ -584,6 +589,7 @@ static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * outp
     if (color_type == 3 || has_trns || bit_depth < 8 || out_bpp != bpp)
     {
         uint8_t * out_image_data = (uint8_t *)malloc(height * width * out_bpp);
+        WPNG_ASSERT(out_image_data, 100);
         memset(out_image_data, 0, height * width * out_bpp);
         
         if (color_type == 3)
