@@ -1,6 +1,10 @@
 #ifndef WPNG_COMMON_INCLUDED
 #define WPNG_COMMON_INCLUDED
 
+// you probably want:
+// wpng_write.h
+// wpng_read.h
+
 #include <stdint.h>
 #include <math.h>
 

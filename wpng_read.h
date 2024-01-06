@@ -1,6 +1,9 @@
 #ifndef WPNG_READ_INCLUDED
 #define WPNG_READ_INCLUDED
 
+// you probably want:
+// static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * output)
+
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
@@ -74,7 +77,7 @@ static void apply_gamma(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is
     }
 }
 
-static void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, uint32_t width, uint32_t height, uint8_t interlace_layer, uint8_t bit_depth, uint8_t components)
+static void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, uint32_t width, uint32_t height, uint8_t interlace_layer, uint8_t bit_depth, uint8_t components, uint8_t * error)
 {
     // interlace_layer:
     // 0: not interlaced
@@ -119,7 +122,11 @@ static void defilter(uint8_t * image_data, size_t data_size, byte_buffer * dec, 
     
     size_t scanline_count = ((size_t)height - y_init + y_gap - 1) / y_gap;
     //printf("%lld %lld %lld\n", scanline_count, scanline_count * (bytes_per_scanline + 1), dec->len);
-    assert(scanline_count * (bytes_per_scanline + 1) <= dec->len);
+    if(scanline_count * (bytes_per_scanline + 1) > dec->len)
+    {
+        *error = 2;
+        return;
+    }
     
     for (size_t y = y_init; bytes_per_scanline > 0 && y < height; y += y_gap)
     {
@@ -205,6 +212,7 @@ enum {
     WPNG_READ_SKIP_GAMMA_CORRECTION = 4, // don't apply gamma correction
     WPNG_READ_SKIP_IDAT_CRC = 8, // like chrome
     WPNG_READ_ERROR_ON_BAD_ANCILLARY_CRC = 16, // treat chunks with bad CRCs like unknown chunks
+    WPNG_READ_SKIP_ADLER32 = 32, // don't check zlib checksums
     WPNG_READ_FORCE_8BIT = 256, // convert 16-bit images to 8-bit on load
 };
 
@@ -545,12 +553,19 @@ static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * outp
     assert(image_data);
     memset(image_data, 0, height * bytes_per_scanline);
     
+    uint8_t defilter_error = 0;
     if (!interlacing)
-        defilter(image_data, height * bytes_per_scanline, &dec, width, height, 0, bit_depth, components);
+    {
+        defilter(image_data, height * bytes_per_scanline, &dec, width, height, 0, bit_depth, components, &defilter_error);
+        WPNG_ASSERT(defilter_error == 0, defilter_error);
+    }
     else
     {
         for (uint8_t i = 1; i <= 7; i += 1)
-            defilter(image_data, height * bytes_per_scanline, &dec, width, height, i, bit_depth, components);
+        {
+            defilter(image_data, height * bytes_per_scanline, &dec, width, height, i, bit_depth, components, &defilter_error);
+            WPNG_ASSERT(defilter_error == 0, defilter_error);
+        }
     }
     
     // convert to Y/YA/RGB/RGBA if needed

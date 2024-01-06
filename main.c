@@ -67,11 +67,14 @@ int main(int argc, char ** argv)
         wpng_load_output output;
         memset(&output, 0, sizeof(wpng_load_output));
         
+        uint32_t flags = 0;
 #ifdef TEST_VS_LIBPNG
-        wpng_load(&in_buf, WPNG_READ_FORCE_8BIT, &output);
-#else
-        wpng_load(&in_buf, 0, &output);
+        flags |= WPNG_READ_FORCE_8BIT;
 #endif
+#ifdef FOR_FUZZING
+        flags |= WPNG_READ_SKIP_CRC | WPNG_READ_SKIP_ADLER32;
+#endif
+        wpng_load(&in_buf, flags, &output);
         
 #ifdef TEST_VS_LIBPNG
         // skip test if original image has gamma and was 16 bit

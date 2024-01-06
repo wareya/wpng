@@ -88,6 +88,7 @@ static uint16_t read_huff_code(bit_buffer * input, uint16_t * code_by_len, int *
     }
     //printf("read a code (%d) with length %d\n", code, code_len);
     ASSERT_OR_BROKEN_FILE(code != 0 || code_len < 16, code)
+    ASSERT_OR_BROKEN_FILE(code < (1 << 15), code)
     return code;
 }
 
@@ -179,7 +180,7 @@ static byte_buffer do_inflate(byte_buffer * input_bytes, int * error, uint8_t he
     memset(static_dists_by_len, 0, sizeof(uint16_t) * 16);
     static_dists_by_len[5] = 0xFFFF;
     
-    if (header_mode == 1)
+    if (header_mode == 1 || header_mode == 10)
     {
         uint16_t info = bits_pop(&input, 16);
         uint16_t check = byteswap_int(info, 2);
@@ -189,7 +190,7 @@ static byte_buffer do_inflate(byte_buffer * input_bytes, int * error, uint8_t he
         ASSERT_OR_BROKEN_FILE((cmf & 0xF) == 8, ret) // deflate
         ASSERT_OR_BROKEN_FILE((flg & 0x20) == 0, ret) // FDICT flag; dictionaries are not supported
     }
-    else if (header_mode >= 2)
+    else if (header_mode == 2 || header_mode == 20)
     {
         ASSERT_OR_BROKEN_FILE(bits_pop(&input, 8) == 0x1F, ret) // magic
         ASSERT_OR_BROKEN_FILE(bits_pop(&input, 8) == 0x8B, ret) // magic
@@ -340,7 +341,6 @@ static byte_buffer do_inflate(byte_buffer * input_bytes, int * error, uint8_t he
         if (final)
             break;
     }
-    
     if (header_mode == 1)
     {
         bits_align_to_byte(&input);
@@ -349,7 +349,7 @@ static byte_buffer do_inflate(byte_buffer * input_bytes, int * error, uint8_t he
         uint32_t checksum = infl_compute_adler32(ret.data, ret.len);
         ASSERT_OR_BROKEN_FILE(expected_checksum == checksum, ret)
     }
-    else if (header_mode >= 2)
+    else if (header_mode == 2)
     {
         uint32_t crc = infl_compute_crc32(ret.data, ret.len, 0);
         uint32_t expected_crc = bits_pop(&input, 32);

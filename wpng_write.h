@@ -1,6 +1,9 @@
 #ifndef WPNG_WRITE_INCLUDED
 #define WPNG_WRITE_INCLUDED
 
+// you probably want:
+// static byte_buffer wpng_write(uint32_t width, uint32_t height, uint8_t bpp, uint8_t is_16bit, uint8_t * image_data, size_t bytes_per_scanline, uint32_t flags, int8_t compression_quality)
+
 #include <stdint.h>
 #include <stddef.h>
 #include <math.h>
