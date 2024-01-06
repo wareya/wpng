@@ -150,6 +150,9 @@ int main(int argc, char ** argv)
         
         if (output.error == 0)
         {
+#ifdef FOR_FUZZING
+            puts("no error");
+#else
             puts("writing out.png");
             
             uint32_t width = output.width;
@@ -164,6 +167,7 @@ int main(int argc, char ** argv)
             FILE * f2 = fopen("out.png", "wb");
             fwrite(out.data, out.len, 1, f2);
             fclose(f2);
+#endif // FOR_FUZZING
         }
         else
         {
