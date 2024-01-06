@@ -372,6 +372,11 @@ static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * outp
             color_type = byte_pop(buf);
             WPNG_ASSERT(color_type <= 6 && color_type != 1 && color_type != 5, 5);
             
+            if (color_type == 2 || color_type == 4 || color_type == 6)
+                WPNG_ASSERT(bit_depth == 8 || bit_depth == 16, 5)
+            else if (color_type == 3)
+                WPNG_ASSERT(bit_depth == 1 || bit_depth == 2 || bit_depth == 4 || bit_depth == 8, 5)
+            
             WPNG_ASSERT(byte_pop(buf) == 0, 5); // compression method, must always be 0 for PNGs
             WPNG_ASSERT(byte_pop(buf) == 0, 5); // filter method, must always be 0 for PNGs
             interlacing = byte_pop(buf);
