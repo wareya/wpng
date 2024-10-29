@@ -556,6 +556,7 @@ static void wpng_load(byte_buffer * buf, uint32_t flags, wpng_load_output * outp
     idat.cur = 0;
     int error = 0;
     byte_buffer dec = do_inflate(&idat, &error, 1); // decompresses into `dec` (declared earlier)
+    free(idat.data);
     dec.cur = 0;
     WPNG_ASSERT(error == 0, 11);
     
